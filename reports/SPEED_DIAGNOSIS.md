@@ -174,3 +174,24 @@ Priority order:
 
 No production decoder change, additional training epoch, or test-set evaluation
 was performed for this diagnosis.
+
+## k sweep with the update-9,875 drafter
+
+Same A10 job, first 20 validation prompts × 2 repetitions, 64 new tokens,
+rotated order ([k_sweep.py](../k_sweep.py), raw: [k-sweep.json](k-sweep.json)).
+Target-only: **33.67 tok/s**. Test set untouched.
+
+| k | Tok/s | Acceptance | Tokens / target pass | Mean vs target (95% CI) | Faster than target |
+|---:|---:|---:|---:|---:|---:|
+| 1 | **29.15** | 75.8% | 1.74 | −13.2% (−14.5, −11.9) | 0/40 |
+| 2 | 28.54 | 66.3% | 2.29 | −14.5% (−17.0, −11.9) | 2/40 |
+| 4 | 24.54 | 51.4% | 2.97 | −25.7% (−29.1, −21.8) | 2/40 |
+| 8 | 17.83 | 34.0% | 3.56 | −43.7% (−48.6, −37.9) | 2/40 |
+
+k=1 is fastest (+19% over k=4) but still loses to target-only on every pair.
+Derived estimate: a k=1 round yields 1.74 tokens in ~60 ms; target-only takes
+~30 ms/token, so one 0.6B drafter forward costs roughly as much as one 4B
+forward. At batch 1 on this eager-PyTorch path, latency tracks per-layer launch
+overhead (28 drafter layers vs 36 target layers), not parameter count. No k can
+win while that holds; a cheaper drafter step (CUDA graphs / `torch.compile`,
+fewer layers) is the lever, not more training.
