@@ -3,10 +3,25 @@
 This project will test whether distilling a Qwen3-0.6B drafter toward a frozen
 Qwen3-4B target improves speculative decoding acceptance and generation speed.
 
-**Current stage: infrastructure, a fixed WikiText pilot, greedy baseline
-evaluation, and a completed one-epoch LoRA training/comparison pilot.**
+**Current stage: completed 500-chunk pilot, 10k-chunk continuation, and speed
+diagnosis. Speculative decoding remains slower than target-only generation.**
 The setup smoke test checks real BF16 computation on an A10 and records hardware
 measurements in W&B. It does not report training results.
+
+## Documentation
+
+- [Project guide](docs/PROJECT_GUIDE.md): objective, architecture, data, training,
+  evaluation, W&B/checkpoints, infrastructure, incidents, and current limitations.
+- [Demo submission plan](docs/DEMO_PLAN.md): completed work, remaining deliverables,
+  and a recording outline.
+- [Baseline and numerical checks](reports/BASELINE.md).
+- [500-chunk training pilot](reports/TRAINING.md).
+- [10k training continuation](reports/TRAINING_10K.md).
+- [Speed diagnosis](reports/SPEED_DIAGNOSIS.md): same-job checkpoint comparison,
+  k sweep, forward timings, repetitive outputs, and next experiments.
+
+Historical reports preserve their original measurements. Read the speed
+diagnosis before interpreting the modest gains from additional training.
 
 ## Install the local runner
 
