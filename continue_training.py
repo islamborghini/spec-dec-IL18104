@@ -66,6 +66,14 @@ def inspect_continuation():
             "history_rows_with_optimizer_step": len(history)}
 
 
+@train.app.function(image=image, gpu="A10", cpu=(2, 2), memory=(24576, 24576),
+                    secrets=[wandb_secret], volumes={"/cache": train.cache},
+                    timeout=3600, startup_timeout=300, retries=0, max_containers=1,
+                    scaledown_window=2, single_use_containers=True)
+def resume_training(code_revision, plan):
+    return train.train_and_evaluate.local(code_revision, plan)
+
+
 def main():
     import subprocess
 
@@ -82,7 +90,7 @@ def main():
         plan = inspect_continuation.remote()
         print(json.dumps(plan, indent=2), flush=True)
         print("CPU training checks:", train.check_training.remote(), flush=True)
-        result = train.train_and_evaluate.with_options(image=image, timeout=3600).remote(revision, plan)
+        result = resume_training.remote(revision, plan)
     train.save_result(result, "training-10k")
 
 

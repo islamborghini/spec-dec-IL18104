@@ -3,8 +3,9 @@
 import copy
 import json
 import unittest
+from unittest.mock import patch
 
-from continue_training import ROOT, continuation_plan, last_optimizer_step
+from continue_training import ROOT, continuation_plan, last_optimizer_step, resume_training
 
 
 class ContinuationTest(unittest.TestCase):
@@ -34,6 +35,12 @@ class ContinuationTest(unittest.TestCase):
         self.assertEqual(last_optimizer_step([{}, {"optimizer_step": None},
                                               {"optimizer_step": 124}, {"optimizer_step": 125}]), 125)
         self.assertEqual(last_optimizer_step([{"optimizer_step": None}]), -1)
+
+    def test_gpu_wrapper_forwards_the_checkpoint_plan_to_the_shared_trainer(self):
+        plan = continuation_plan(self.report, 125, self.manifest)
+        with patch("continue_training.train.train_and_evaluate.local", return_value={"ok": True}) as trainer:
+            self.assertEqual(resume_training.local("revision", plan), {"ok": True})
+            trainer.assert_called_once_with("revision", plan)
 
 
 if __name__ == "__main__":
