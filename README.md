@@ -4,7 +4,7 @@ This project will test whether distilling a Qwen3-0.6B drafter toward a frozen
 Qwen3-4B target improves speculative decoding acceptance and generation speed.
 
 **Current stage: infrastructure, a fixed WikiText pilot, greedy baseline
-evaluation, and a one-epoch LoRA training/comparison runner.**
+evaluation, and a completed one-epoch LoRA training/comparison pilot.**
 The setup smoke test checks real BF16 computation on an A10 and records hardware
 measurements in W&B. It does not report training results.
 
@@ -174,6 +174,14 @@ For the submitted loss figure, copy the completed JSON to
 `reports/training.json` and run `python plot_training.py`; it writes
 `reports/training_loss.png` without using a GPU.
 
+The completed pilot is documented in [reports/TRAINING.md](reports/TRAINING.md).
+Validation KL fell from 1.065 to 0.835; draft acceptance rose from 44.1% to 51.7%.
+In the paired validation pilot, trained speculative throughput was 24.4 tokens/s
+versus original speculative 22.5 and target-only 33.6. BF16 discrepancies remain;
+these results do not establish lossless acceleration. The held-out test prompts
+remain unused. Raw results and the loss figure are committed; adapters are in
+the linked W&B run and Modal volume.
+
 ## Fixed WikiText pilot
 
 The prepared files are committed under `data/pilot/`, ready to use without a
@@ -246,4 +254,6 @@ Four tiny-Qwen cache tests are skipped locally when PyTorch is absent; the
 baseline runner executes them on Modal CPU and requires all decoder checks to
 pass without skips before starting a GPU. Decoder caching follows the pinned
 [Transformers cache API](https://huggingface.co/docs/transformers/v4.57.3/en/kv_cache).
+Three training checks are also skipped when local PyTorch/PEFT are absent;
+`train.py` executes those on Modal CPU before allocating its GPU.
 The remote smoke test above checks the actual GPU and online W&B connection.
