@@ -19,6 +19,8 @@ measurements in W&B. It does not report training results.
 - [10k training continuation](reports/TRAINING_10K.md).
 - [Speed diagnosis](reports/SPEED_DIAGNOSIS.md): same-job checkpoint comparison,
   k sweep, forward timings, repetitive outputs, and next experiments.
+- [Continuation to 10,000 optimizer steps](reports/TRAINING_TO_10K_STEPS.md):
+  fresh-data audit, exact optimizer resume, experiment plan, and run status.
 
 Historical reports preserve their original measurements. Read the speed
 diagnosis before interpreting the modest gains from additional training.

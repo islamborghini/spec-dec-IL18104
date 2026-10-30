@@ -27,6 +27,7 @@ and linked screen recording have not been created.
 | [Pilot report](../reports/TRAINING.md) | 500-chunk training, loss curves, generation comparison |
 | [10k report](../reports/TRAINING_10K.md) | Same-run continuation and its evaluation |
 | [Speed diagnosis](../reports/SPEED_DIAGNOSIS.md) | Paired checkpoints, k sweep, forward timing, limitations |
+| [10,000-step continuation](../reports/TRAINING_TO_10K_STEPS.md) | Newly authorized fresh-data experiment and status |
 
 Each experiment report links its raw JSON. Dataset manifests contain the full
 revisions, checksums, sampling metadata, and recorded audit results.
@@ -40,9 +41,11 @@ revisions, checksums, sampling metadata, and recorded audit results.
 | [`prepare_10k.py`](../prepare_10k.py) | Expanded dataset preserving the original pilot prefix/evaluation files |
 | [`decoding.py`](../decoding.py) | Greedy target-only and cached speculative decoding |
 | [`baseline.py`](../baseline.py) | Baseline GPU job, timing, pooled metrics, output checks |
-| [`distillation.py`](../distillation.py) | Full-vocabulary per-position teacher/student KL |
+| [`distillation.py`](../distillation.py) | Full-vocabulary KL and optimizer/RNG restoration |
 | [`train.py`](../train.py) | LoRA training, validation/selection, checkpoint saving, generation comparison |
 | [`continue_training.py`](../continue_training.py) | Guarded first continuation of the existing W&B run |
+| [`prepare_fresh.py`](../prepare_fresh.py) | Fresh nonoverlapping windows and full official evaluation passage audit |
+| [`continue_to_10k.py`](../continue_to_10k.py) | Restore at 2,625 and continue through 10,000 total updates |
 | [`diagnose_speed.py`](../diagnose_speed.py) | Paired checkpoints, exploratory k sweep, forward timing |
 | [`plot_training.py`](../plot_training.py) | CPU-only plots of saved training and validation history |
 | [`tests/`](../tests/) | Dataset, decoder, distillation, setup, and continuation checks |
@@ -218,7 +221,9 @@ W&B also stores best/last model artifacts and evaluation artifact versions.
 125→2,625 phase.** Its stale-history guard now refuses a rerun from update 125.
 Saved current weights/optimizer enable further work, but an additional phase
 needs a new checkpoint/data-order/step plan and loader. It is not implemented
-as a generic arbitrary-step resume command.
+as a generic arbitrary-step resume command. A separate specialized
+`continue_to_10k.py` now implements the authorized 2,625→10,000 phase; see the
+linked experiment plan for preparation and launch status.
 
 ## Decoding and metric definitions
 

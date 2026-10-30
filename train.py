@@ -44,13 +44,13 @@ def train_and_evaluate(code_revision, continuation=None):
     import torch
     import wandb
     from huggingface_hub import snapshot_download
-    from peft import LoraConfig, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
+    from peft import LoraConfig, PeftModel, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
     from safetensors.torch import load_file
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     sys.path.insert(0, "/project")
     from decoding import greedy_decode, speculative_decode
-    from distillation import distillation_loss
+    from distillation import distillation_loss, restore_training_state
 
     started = time.monotonic()
     torch.manual_seed(42)
@@ -64,7 +64,9 @@ def train_and_evaluate(code_revision, continuation=None):
     train_count = continuation["train_chunks"] if continuation else 500
     steps = train_count // 4
     interval = 250 if continuation else 25
-    job_limit = 3600 if continuation else 600
+    job_limit = continuation.get("job_limit_seconds", 3600) if continuation else 600
+    if continuation:
+        assert start_step + steps == continuation["end_step"]
     manifest_path = "/project/expanded/manifest.json" if continuation else "/project/manifest.json"
     manifest = json.loads(Path(manifest_path).read_text())
     if continuation:
@@ -106,6 +108,13 @@ def train_and_evaluate(code_revision, continuation=None):
     initial_b = b_probe.detach().clone()
     teacher_probe = next(target.parameters()).detach().flatten()[:16].clone()
     optimizer = torch.optim.AdamW(params, lr=1e-4, weight_decay=0.0)
+    optimizer_restored = bool(continuation and continuation.get("optimizer_state_restored"))
+    if optimizer_restored:
+        state_path = Path(continuation["checkpoint_dir"]) / "training_state.pt"
+        assert hashlib.sha256(state_path.read_bytes()).hexdigest() == continuation["optimizer_sha256"]
+        restore_training_state(optimizer, state_path, start_step)
+        print(f"Restored Adam moments and RNG at optimizer update {start_step}", flush=True)
+    eval_count = 20 if optimizer_restored else 5
     config = {
         "code_revision": code_revision, "gpu": gpu, "dtype": "bfloat16", "attention": "sdpa",
         "target": TARGET, "target_revision": TARGET_REVISION, "drafter": TOKENIZER,
@@ -113,7 +122,7 @@ def train_and_evaluate(code_revision, continuation=None):
         "train_chunks": train_count, "validation_chunks": 50, "chunk_tokens": 256,
         "microbatch": 1, "gradient_accumulation": 4, "optimizer_steps": steps,
         "starting_optimizer_step": start_step, "ending_optimizer_step": start_step + steps,
-        "optimizer_state_restored": False,
+        "optimizer_state_restored": optimizer_restored,
         "learning_rate": 1e-4, "weight_decay": 0.0, "max_grad_norm": 1.0,
         "lora_rank": 8, "lora_alpha": 16, "lora_dropout": 0.0,
         "lora_modules": ["q_proj", "v_proj"], "trainable_parameters": sum(p.numel() for p in params),
@@ -121,7 +130,7 @@ def train_and_evaluate(code_revision, continuation=None):
         "positions": "all 256 prefixes per chunk; no padding, labels, chat template, or activation matching",
         "checkpoint_selection": "lowest KL on all 50 validation chunks, including phase-start weights",
         "validation_interval": interval, "test_set_used": False, "k": 4,
-        "eval_prompts": 5, "eval_prompt_tokens": 128, "eval_max_new_tokens": 64, "eval_repetitions": 2,
+        "eval_prompts": eval_count, "eval_prompt_tokens": 128, "eval_max_new_tokens": 64, "eval_repetitions": 2,
         "timing": "synchronized wall time including prefill and all decode work; both drafters merged/plain",
         "dataset_manifest": manifest,
     }
@@ -181,6 +190,9 @@ def train_and_evaluate(code_revision, continuation=None):
                             "phase_updates_completed": step - start_step,
                             "torch_rng_state": torch.get_rng_state(), "cuda_rng_state": torch.cuda.get_rng_state()},
                            output / "training_state.pt")
+                (output / "progress.json").write_text(json.dumps({**result,
+                    "last_checkpoint_step": step, "best_step": best_step,
+                    "best_validation_kl": best_loss}, indent=2) + "\n")
                 cache.commit()
             print(f"Validation step={step} KL={metrics['kl']:.6f} agreement={metrics['teacher_forced_top1_agreement']:.4f}", flush=True)
             student.train()
@@ -234,25 +246,29 @@ def train_and_evaluate(code_revision, continuation=None):
         torch.cuda.empty_cache()
         result["merged_validation"] = validation(trained)
         original = load_model(paths["drafter"])
+        previous = (PeftModel.from_pretrained(load_model(paths["drafter"]), continuation["checkpoint_dir"],
+                    is_trainable=False).merge_and_unload(safe_merge=True).eval() if optimizer_restored else None)
         tokenizer = AutoTokenizer.from_pretrained(paths["target"], local_files_only=True)
         draft_tokenizer = AutoTokenizer.from_pretrained(paths["drafter"], local_files_only=True)
         assert tokenizer.backend_tokenizer.to_str() == draft_tokenizer.backend_tokenizer.to_str()
         eos = target.generation_config.eos_token_id
         eos_ids = set(eos if isinstance(eos, list) else [eos])
-        prompts = [torch.tensor([r["input_ids"][:128]], device="cuda") for r in datasets["validation"][:5]]
+        prompts = [torch.tensor([r["input_ids"][:128]], device="cuda") for r in datasets["validation"][:eval_count]]
+        methods = ["target", "original", "previous", "trained"] if optimizer_restored else ["target", "original", "trained"]
 
         def decode(mode, prompt, budget):
             if mode == "target":
                 return greedy_decode(target, prompt, budget, eos_ids)
-            return speculative_decode(target, original if mode == "original" else trained, prompt, budget, 4, eos_ids)
+            drafter = {"original": original, "previous": previous, "trained": trained}[mode]
+            return speculative_decode(target, drafter, prompt, budget, 4, eos_ids)
 
-        for mode in ("target", "original", "trained"):
+        for mode in methods:
             decode(mode, prompts[0], 8)
         torch.cuda.synchronize()
         for repetition in range(2):
             for index, prompt in enumerate(prompts):
-                modes = ["target", "original", "trained"]
-                rotation = (index + repetition) % 3
+                modes = methods
+                rotation = (index + repetition) % len(modes)
                 for mode in modes[rotation:] + modes[:rotation]:
                     if time.monotonic() - started > job_limit - 60:
                         raise TimeoutError("Evaluation stopped before the GPU execution limit")
@@ -265,16 +281,17 @@ def train_and_evaluate(code_revision, continuation=None):
                                    "article_title": datasets["validation"][index]["article_title"]})
                     result["records"].append(record)
                     print(f"Eval rep={repetition} prompt={index} mode={mode} seconds={record['seconds']:.3f}", flush=True)
+        assert len(result["records"]) == 2 * eval_count * len(methods)
         result["comparison"] = {
             variant: summarize([{**r, "mode": "speculative" if r["mode"] == variant else "target"}
                                 for r in result["records"] if r["mode"] in ("target", variant)])
-            for variant in ("original", "trained")
+            for variant in methods[1:]
         }
-        table = wandb.Table(columns=["article", "prompt", "target", "original_drafter", "trained_drafter"])
+        table = wandb.Table(columns=["article", "prompt", *methods])
         for index, prompt in enumerate(prompts):
             pair = {r["mode"]: r for r in result["records"] if r["prompt_index"] == index and r["repetition"] == 0}
             table.add_data(datasets["validation"][index]["article_title"], tokenizer.decode(prompt[0]),
-                           *(tokenizer.decode(pair[m]["token_ids"]) for m in ("target", "original", "trained")))
+                           *(tokenizer.decode(pair[m]["token_ids"]) for m in methods))
         run.log({"examples": table})
         run.summary.update({"selection/best_step": best_step, "selection/best_validation_kl": best_loss,
                             "validation/merged_kl": result["merged_validation"]["kl"],

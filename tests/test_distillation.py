@@ -5,12 +5,39 @@ import math
 import tempfile
 import unittest
 
-from distillation import distillation_loss
+from distillation import distillation_loss, restore_training_state
 
 
 @unittest.skipUnless(importlib.util.find_spec("torch") and importlib.util.find_spec("peft"),
                      "Real training checks run on Modal CPU")
 class DistillationTest(unittest.TestCase):
+    def test_resumed_adam_produces_the_same_next_update_and_restores_rng(self):
+        import torch
+
+        torch.manual_seed(17)
+        original = torch.nn.Parameter(torch.tensor([1.0, -2.0]))
+        optimizer = torch.optim.AdamW([original], lr=1e-4, weight_decay=0.0)
+        original.square().sum().backward()
+        optimizer.step()
+        with tempfile.TemporaryDirectory() as directory:
+            path = directory + "/state.pt"
+            rng = torch.get_rng_state()
+            torch.save({"optimizer": optimizer.state_dict(), "optimizer_step": 2625,
+                        "torch_rng_state": rng, "cuda_rng_state": None}, path)
+            expected_random = torch.rand(3)
+            resumed = torch.nn.Parameter(original.detach().clone())
+            second = torch.optim.AdamW([resumed], lr=0.2)
+            restore_training_state(second, path, 2625)
+            torch.testing.assert_close(torch.rand(3), expected_random, atol=0, rtol=0)
+            for param, opt in ((original, optimizer), (resumed, second)):
+                opt.zero_grad()
+                param.square().sum().backward()
+                opt.step()
+            torch.testing.assert_close(original, resumed, atol=0, rtol=0)
+            self.assertEqual(second.state[resumed]["step"].item(), 2)
+            with self.assertRaises(ValueError):
+                restore_training_state(second, path, 125)
+
     def test_kl_direction_and_per_token_normalization(self):
         import torch
 
