@@ -142,7 +142,7 @@ def run_baseline(code_revision):
                   "nvidia-smi", "--query-gpu=name,driver_version,power.limit,clocks.max.sm",
                   "--format=csv,noheader"], text=True).strip(),
               "versions": {p: importlib.metadata.version(p) for p in
-                           ("torch", "transformers", "tokenizers", "modal", "wandb")},
+                           ("torch", "transformers", "tokenizers", "wandb")},
               "cuda": torch.version.cuda}
 
     def decode(mode, prompt, budget):
