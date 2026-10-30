@@ -184,6 +184,12 @@ the linked W&B run and Modal volume.
 
 ## Expanded data and continuation in the same W&B run
 
+The continuation is complete: validation KL **0.83503 → 0.75725** over updates
+126–2,625 in the same W&B run. In the same-job generation comparison, trained
+speculative throughput was **24.85 tokens/sec**, versus **22.36** with the
+original drafter and **32.87** target-only. BF16 discrepancies remain.
+See the [continuation report and KL figure](reports/TRAINING_10K.md).
+
 ```sh
 TOKENIZERS_PARALLELISM=false python prepare_10k.py
 MODAL_PROFILE=islam-95550 python continue_training.py
@@ -222,6 +228,17 @@ pilot checkpoint. Local outputs go to `results/training-10k.json` and
 `results/adapters-hkays15c/training-10k/`. This command is specifically the first
 continuation of the pilot; rerunning it after history advances fails the
 preflight rather than duplicating updates.
+
+In the same W&B training run, `train/kl` and `validation/kl` use
+`optimizer_step` as their x-axis. `train/gradient_norm` records the norm returned
+by PyTorch **before** clipping to 1.0; it is not the learning rate or the size of
+Adam's weight update. Training batches differ, so inspect the fixed validation
+curve alongside the noisier batch metrics.
+
+To export both training phases after the continuation finishes, copy
+`results/training-10k.json` to `reports/training-10k.json` and run
+`python plot_training.py --continuation`. This writes
+`reports/training_10k_loss.png`, preserving the original pilot figure.
 
 ## Fixed WikiText pilot
 
