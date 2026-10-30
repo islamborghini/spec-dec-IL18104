@@ -4,7 +4,7 @@ import copy
 import json
 import unittest
 
-from continue_training import ROOT, continuation_plan
+from continue_training import ROOT, continuation_plan, last_optimizer_step
 
 
 class ContinuationTest(unittest.TestCase):
@@ -29,6 +29,11 @@ class ContinuationTest(unittest.TestCase):
         manifest["file_sha256"]["validation.jsonl"] = "changed"
         with self.assertRaisesRegex(ValueError, "Validation data changed"):
             continuation_plan(self.report, 125, manifest)
+
+    def test_sparse_wandb_rows_do_not_reset_or_break_the_step_counter(self):
+        self.assertEqual(last_optimizer_step([{}, {"optimizer_step": None},
+                                              {"optimizer_step": 124}, {"optimizer_step": 125}]), 125)
+        self.assertEqual(last_optimizer_step([{"optimizer_step": None}]), -1)
 
 
 if __name__ == "__main__":

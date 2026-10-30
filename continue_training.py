@@ -37,6 +37,10 @@ def continuation_plan(report, latest_step, manifest):
             "note": "Continue adapter weights; Adam moments restart because pilot did not save optimizer state."}
 
 
+def last_optimizer_step(history):
+    return max((row["optimizer_step"] for row in history if row.get("optimizer_step") is not None), default=-1)
+
+
 @train.app.function(image=image, cpu=(1, 1), memory=(2048, 2048),
                     secrets=[wandb_secret], volumes={"/cache": train.cache},
                     timeout=90, retries=0, max_containers=1,
@@ -49,7 +53,7 @@ def inspect_continuation():
     if run.state == "running":
         raise RuntimeError("The W&B training run is already running")
     history = list(run.scan_history(keys=["optimizer_step"], page_size=500))
-    latest = max((row["optimizer_step"] for row in history), default=-1)
+    latest = last_optimizer_step(history)
     report = json.loads(Path("/project/pilot-training.json").read_text())
     manifest = json.loads(Path("/project/expanded/manifest.json").read_text())
     plan = continuation_plan(report, latest, manifest)
