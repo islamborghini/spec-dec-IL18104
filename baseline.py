@@ -155,7 +155,8 @@ def run_baseline(code_revision):
                     settings=wandb.Settings(init_timeout=30)) as run:
         result["wandb_url"] = run.url
         # Check our target loop against Transformers on the actual checkpoint, untimed.
-        reference = target.generate(prompts[0], max_new_tokens=16, do_sample=False,
+        reference = target.generate(prompts[0], attention_mask=torch.ones_like(prompts[0]),
+                                    max_new_tokens=16, do_sample=False,
                                     temperature=None, top_p=None, top_k=None, repetition_penalty=1.0,
                                     eos_token_id=sorted(eos_ids), pad_token_id=tokenizer.pad_token_id,
                                     use_cache=True)[0, 128:].tolist()
@@ -190,6 +191,8 @@ def run_baseline(code_revision):
                            tokenizer.decode(pair["speculative"]["token_ids"]),
                            pair["target"]["token_ids"] == pair["speculative"]["token_ids"])
         run.log({"examples": table, "gpu/peak_allocated_gib": result["peak_allocated_gib"],
+                 "baseline/target_tokens_per_second": result["summary"]["target"]["tokens_per_second"],
+                 "baseline/speculative_tokens_per_second": result["summary"]["speculative"]["tokens_per_second"],
                  "baseline/throughput_ratio": result["summary"]["throughput_ratio"],
                  "checks/mismatched_sequences": result["summary"]["checks"]["mismatched_sequences"],
                  "speculative/acceptance_rate": result["summary"]["speculative"]["acceptance_rate"],

@@ -121,6 +121,12 @@ The GPU function has a **600-second execution timeout**, no retries, one
 container, and rapid scale-down. Startup and model loading are billable; the
 timeout is not a dollar spending cap. The job performs no training or k sweep.
 
+The first real run and its numerical follow-up are documented in
+[reports/BASELINE.md](reports/BASELINE.md). The untrained k=4 drafter was slower
+overall; BF16 output differences are reported explicitly. A separate FP32 target
+check matched on all five validation cases. Raw JSON reports are committed so
+the evidence can be inspected without a GPU or W&B access.
+
 ## Fixed WikiText pilot
 
 The prepared files are committed under `data/pilot/`, ready to use without a

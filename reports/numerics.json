@@ -1,0 +1,120 @@
+{
+  "bf16_identical_prefix_evidence": [
+    {
+      "prompt_index": 0,
+      "first_divergence_position": 25,
+      "identical_prefix": true,
+      "target_top2_ids": [
+        4116,
+        2274
+      ],
+      "target_top2_logits": [
+        19.125,
+        19.0
+      ],
+      "spec_top2_ids": [
+        4116,
+        2274
+      ],
+      "spec_top2_logits": [
+        19.125,
+        19.125
+      ],
+      "max_abs_logit_difference": 0.25,
+      "mean_abs_logit_difference": 0.04119987413287163
+    },
+    {
+      "prompt_index": 1,
+      "first_divergence_position": 58,
+      "identical_prefix": true,
+      "target_top2_ids": [
+        3793,
+        279
+      ],
+      "target_top2_logits": [
+        22.0,
+        22.0
+      ],
+      "spec_top2_ids": [
+        3793,
+        279
+      ],
+      "spec_top2_logits": [
+        22.0,
+        21.875
+      ],
+      "max_abs_logit_difference": 0.375,
+      "mean_abs_logit_difference": 0.046028003096580505
+    },
+    {
+      "prompt_index": 2,
+      "first_divergence_position": 27,
+      "identical_prefix": true,
+      "target_top2_ids": [
+        8592,
+        584
+      ],
+      "target_top2_logits": [
+        20.875,
+        20.875
+      ],
+      "spec_top2_ids": [
+        8592,
+        584
+      ],
+      "spec_top2_logits": [
+        20.875,
+        20.75
+      ],
+      "max_abs_logit_difference": 0.25,
+      "mean_abs_logit_difference": 0.08138249814510345
+    },
+    {
+      "prompt_index": 4,
+      "first_divergence_position": 23,
+      "identical_prefix": true,
+      "target_top2_ids": [
+        572,
+        374
+      ],
+      "target_top2_logits": [
+        21.125,
+        21.0
+      ],
+      "spec_top2_ids": [
+        572,
+        374
+      ],
+      "spec_top2_logits": [
+        21.125,
+        21.125
+      ],
+      "max_abs_logit_difference": 0.171875,
+      "mean_abs_logit_difference": 0.03398626670241356
+    }
+  ],
+  "fp32_target_bf16_drafter_checks": [
+    {
+      "prompt_index": 0,
+      "matches": true
+    },
+    {
+      "prompt_index": 1,
+      "matches": true
+    },
+    {
+      "prompt_index": 2,
+      "matches": true
+    },
+    {
+      "prompt_index": 3,
+      "matches": true
+    },
+    {
+      "prompt_index": 4,
+      "matches": true
+    }
+  ],
+  "seconds": 57.327548525000005,
+  "scope": "validation only; untimed diagnostic, not a speed benchmark"
+}
