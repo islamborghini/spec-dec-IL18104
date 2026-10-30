@@ -3,8 +3,8 @@
 This project will test whether distilling a Qwen3-0.6B drafter toward a frozen
 Qwen3-4B target improves speculative decoding acceptance and generation speed.
 
-**Current stage: infrastructure, a fixed WikiText pilot, and greedy baseline
-evaluation.** LoRA training is not implemented yet.
+**Current stage: infrastructure, a fixed WikiText pilot, greedy baseline
+evaluation, and a one-epoch LoRA training/comparison runner.**
 The setup smoke test checks real BF16 computation on an A10 and records hardware
 measurements in W&B. It does not report training results.
 
@@ -127,6 +127,53 @@ overall; BF16 output differences are reported explicitly. A separate FP32 target
 check matched on all five validation cases. Raw JSON reports are committed so
 the evidence can be inspected without a GPU or W&B access.
 
+## Train the demo pilot
+
+```sh
+MODAL_PROFILE=islam-95550 python train.py
+```
+
+The CPU preflight checks KL direction/normalization, frozen base weights,
+adapter updates, and adapter save/reload/merge before the GPU job. Commit code
+before launch. This uses the same A10 family, pinned models, BF16, SDPA, and
+prepared dataset as the baseline. Training is one shuffled pass over 500 chunks:
+microbatch one, accumulate four, 125 AdamW updates, constant learning rate
+`1e-4`, zero weight decay, gradient clipping at 1.0. LoRA uses rank 8, alpha 16,
+no dropout, and `q_proj`/`v_proj` only. These are pilot settings, not tuned optima.
+
+The frozen Qwen3-4B supplies next-token distributions on each text prefix.
+We minimize `KL(target || drafter)` over the full shared vocabulary, averaging
+over all 256 positions in each chunk, using FP32 log-softmax and temperature one.
+This is probability distillation on existing text, without activation matching
+or generated training answers. Only adapter weights receive gradients.
+
+Evaluate all 50 validation chunks at updates 0, 25, 50, 75, 100, and 125; keep
+the checkpoint with lowest validation KL, including the initial checkpoint if
+training does not help. W&B records training/validation KL and validation
+teacher-forced top-one agreement. This agreement uses fixed text prefixes and
+is distinct from speculative acceptance during free generation.
+
+Save best and final adapters to both W&B model artifacts and
+`spec-dec-benchmark-model-cache:/project-runs/<wandb-run-id>/`. Best weights are
+restored and checked before merging for inference. The merged model's validation
+loss is measured again to expose any BF16 merge effects. The original drafter
+is loaded separately; both inference drafters use plain Qwen modules without
+adapter execution overhead. Compare target-only, original speculative, and
+trained speculative decoding with the same five validation prompts, k=4,
+64-token output limit, two repetitions, and rotating execution order. Report
+numerical mismatches explicitly using the baseline's existing checks.
+
+The runner saves `results/training.json` and downloads checksummed adapter files
+to `results/adapters-<run-id>/`. W&B has loss curves, model artifacts, sample
+continuations, and pooled comparison metrics. GPU execution is limited to ten
+minutes, with one container and no retries; no held-out test file is mounted.
+The best checkpoint is chosen by validation loss; block-size tuning remains for
+later. Training runs and their weights are unique per W&B run ID.
+
+For the submitted loss figure, copy the completed JSON to
+`reports/training.json` and run `python plot_training.py`; it writes
+`reports/training_loss.png` without using a GPU.
+
 ## Fixed WikiText pilot
 
 The prepared files are committed under `data/pilot/`, ready to use without a
@@ -170,6 +217,8 @@ tokenizer backends are checked for equality. Test `reference_ids`/
 prompt; they are **not** a teacher-generated answer and should not be used as the
 expected output in the speculative-decoding equivalence check. That check must
 compare against target-only generation with the same prompt and decoding setup.
+Here a prompt is a Wikipedia text extract for continuation, not a question.
+Claims from this dataset concern text continuation rather than question answering.
 
 Shuffle training order during training; keep dataset membership fixed. Use
 validation for decisions and test only after freezing the experiment, with the
