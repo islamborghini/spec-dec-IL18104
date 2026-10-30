@@ -182,6 +182,47 @@ these results do not establish lossless acceleration. The held-out test prompts
 remain unused. Raw results and the loss figure are committed; adapters are in
 the linked W&B run and Modal volume.
 
+## Expanded data and continuation in the same W&B run
+
+```sh
+TOKENIZERS_PARALLELISM=false python prepare_10k.py
+MODAL_PROFILE=islam-95550 python continue_training.py
+```
+
+The prepared `data/wikitext-10k/train.jsonl` contains **10,000 chunks from 10,000
+distinct training articles**, 256 tokens each: **2,560,000 tokens**. Its first
+500 rows exactly match the pilot training data; the other 9,500 add new articles.
+Validation/test files remain byte-for-byte unchanged under `data/pilot/`.
+The manifest pins versions, seed, source positions, checksums, and overlap checks.
+Sampling excludes official evaluation articles, repeated training titles/articles,
+duplicate windows, and shared 32-token passages with the fixed evaluation windows.
+The artifact audit runs in the local test suite. CPU preparation never trains a
+model or evaluates the test set.
+
+`continue_training.py` resumes **W&B run `hkays15c`** with `resume="must"`; it
+does not create a new W&B run. A read-only CPU preflight verifies the current
+W&B history and saved pilot checkpoint before any GPU allocation. If history
+has already advanced beyond that checkpoint, it refuses to train from stale
+weights. The pilot ended at update **125**; one new epoch over 10k chunks with
+effective batch four adds 2,500 updates, logging **126–2,625** on the existing
+`optimizer_step` axis. Original W&B history/configuration is preserved; expanded
+settings are recorded under `continuation_from_step_125`.
+
+This is a **weight continuation with a fresh Adam optimizer**: the pilot saved
+LoRA weights, not Adam moments. That optimizer reset is recorded explicitly.
+The continuation saves adapter and optimizer/RNG checkpoints every 250 updates,
+checks all 50 validation chunks, and selects the best validation checkpoint.
+The starting checkpoint is eligible. k remains four; the same five validation
+generation prompts are used for the final comparison, and test data remains unused.
+
+The continuation GPU function has a **one-hour execution timeout**, one
+container, and no automatic retries. It writes new files under
+`/cache/project-runs/hkays15c/continuation-126-2625/`, preserving the original
+pilot checkpoint. Local outputs go to `results/training-10k.json` and
+`results/adapters-hkays15c/training-10k/`. This command is specifically the first
+continuation of the pilot; rerunning it after history advances fails the
+preflight rather than duplicating updates.
+
 ## Fixed WikiText pilot
 
 The prepared files are committed under `data/pilot/`, ready to use without a

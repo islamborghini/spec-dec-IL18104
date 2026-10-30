@@ -34,7 +34,7 @@ def check_training():
               volumes={"/cache": cache}, secrets=[wandb_secret], timeout=600,
               startup_timeout=300, retries=0, max_containers=1,
               scaledown_window=2, single_use_containers=True)
-def train_and_evaluate(code_revision):
+def train_and_evaluate(code_revision, continuation=None):
     import importlib.metadata
     import random
     import subprocess
@@ -60,10 +60,19 @@ def train_and_evaluate(code_revision):
     gpu = torch.cuda.get_device_name(0)
     assert "A10" in gpu, gpu
     cache.reload()
-    manifest = json.loads(Path("/project/manifest.json").read_text())
+    start_step = continuation["start_step"] if continuation else 0
+    train_count = continuation["train_chunks"] if continuation else 500
+    steps = train_count // 4
+    interval = 250 if continuation else 25
+    job_limit = 3600 if continuation else 600
+    manifest_path = "/project/expanded/manifest.json" if continuation else "/project/manifest.json"
+    manifest = json.loads(Path(manifest_path).read_text())
+    if continuation:
+        assert manifest["file_sha256"]["train.jsonl"] == continuation["data_sha256"]
     datasets = {}
-    for split, count in (("train", 500), ("validation", 50)):
-        payload = Path(f"/project/{split}.jsonl").read_bytes()
+    for split, count in (("train", train_count), ("validation", 50)):
+        path = f"/project/expanded/{split}.jsonl" if continuation and split == "train" else f"/project/{split}.jsonl"
+        payload = Path(path).read_bytes()
         assert hashlib.sha256(payload).hexdigest() == manifest["file_sha256"][f"{split}.jsonl"]
         rows = [json.loads(line) for line in payload.decode().splitlines()]
         assert len(rows) == count and all(len(row["input_ids"]) == 256 for row in rows)
@@ -85,6 +94,11 @@ def train_and_evaluate(code_revision):
         task_type="CAUSAL_LM", revision=TOKENIZER_REVISION,
     ))
     student.peft_config["default"].base_model_name_or_path = TOKENIZER
+    if continuation:
+        checkpoint_path = Path(continuation["checkpoint_dir"])
+        for name, expected in continuation["checkpoint_sha256"].items():
+            assert hashlib.sha256((checkpoint_path / name).read_bytes()).hexdigest() == expected
+        set_peft_model_state_dict(student, load_file(str(checkpoint_path / "adapter_model.safetensors")))
     params = [p for p in student.parameters() if p.requires_grad]
     assert params and all("lora_" in n for n, p in student.named_parameters() if p.requires_grad)
     assert not any(p.requires_grad for p in target.parameters())
@@ -96,15 +110,17 @@ def train_and_evaluate(code_revision):
         "code_revision": code_revision, "gpu": gpu, "dtype": "bfloat16", "attention": "sdpa",
         "target": TARGET, "target_revision": TARGET_REVISION, "drafter": TOKENIZER,
         "drafter_revision": TOKENIZER_REVISION, "seed": 42, "epochs": 1,
-        "train_chunks": 500, "validation_chunks": 50, "chunk_tokens": 256,
-        "microbatch": 1, "gradient_accumulation": 4, "optimizer_steps": 125,
+        "train_chunks": train_count, "validation_chunks": 50, "chunk_tokens": 256,
+        "microbatch": 1, "gradient_accumulation": 4, "optimizer_steps": steps,
+        "starting_optimizer_step": start_step, "ending_optimizer_step": start_step + steps,
+        "optimizer_state_restored": False,
         "learning_rate": 1e-4, "weight_decay": 0.0, "max_grad_norm": 1.0,
         "lora_rank": 8, "lora_alpha": 16, "lora_dropout": 0.0,
         "lora_modules": ["q_proj", "v_proj"], "trainable_parameters": sum(p.numel() for p in params),
         "loss": "mean per-position KL(target || drafter), full vocabulary, temperature 1",
         "positions": "all 256 prefixes per chunk; no padding, labels, chat template, or activation matching",
-        "checkpoint_selection": "lowest KL on all 50 validation chunks, including step 0",
-        "validation_interval": 25, "test_set_used": False, "k": 4,
+        "checkpoint_selection": "lowest KL on all 50 validation chunks, including phase-start weights",
+        "validation_interval": interval, "test_set_used": False, "k": 4,
         "eval_prompts": 5, "eval_prompt_tokens": 128, "eval_max_new_tokens": 64, "eval_repetitions": 2,
         "timing": "synchronized wall time including prefill and all decode work; both drafters merged/plain",
         "dataset_manifest": manifest,
@@ -131,16 +147,24 @@ def train_and_evaluate(code_revision):
                 del teacher_logits, student_logits, loss
         return {"kl": total / 50, "teacher_forced_top1_agreement": matches / (50 * 256)}
 
-    with wandb.init(entity=ENTITY, project=PROJECT, name="a10-lora-kl-pilot",
-                    job_type="train-and-evaluate", mode="online", config=config,
+    init_options = ({"id": continuation["run_id"], "resume": "must"} if continuation else
+                    {"name": "a10-lora-kl-pilot", "config": config})
+    with wandb.init(entity=ENTITY, project=PROJECT,
+                    job_type="train-and-evaluate", mode="online", **init_options,
                     settings=wandb.Settings(init_timeout=30)) as run:
+        if continuation:
+            assert run.id == continuation["run_id"] and run.resumed
+            # Preserve the original pilot configuration and mark the larger-data phase explicitly.
+            run.config.update({f"continuation_from_step_{start_step}": config})
         run.define_metric("optimizer_step")
         run.define_metric("train/*", step_metric="optimizer_step")
         run.define_metric("validation/*", step_metric="optimizer_step")
         output = Path("/cache/project-runs") / run.id
+        if continuation:
+            output /= f"continuation-{start_step + 1}-{start_step + steps}"
         output.mkdir(parents=True, exist_ok=False)
         result.update({"wandb_url": run.url, "run_id": run.id, "storage_path": str(output)})
-        best_loss, best_step = float("inf"), 0
+        best_loss, best_step = float("inf"), start_step
 
         def checkpoint(step):
             nonlocal best_loss, best_step
@@ -151,20 +175,28 @@ def train_and_evaluate(code_revision):
                 best_loss, best_step = metrics["kl"], step
                 student.save_pretrained(output / "best", safe_serialization=True, save_embedding_layers=False)
                 cache.commit()
+            if continuation:
+                student.save_pretrained(output / "last", safe_serialization=True, save_embedding_layers=False)
+                torch.save({"optimizer": optimizer.state_dict(), "optimizer_step": step,
+                            "phase_updates_completed": step - start_step,
+                            "torch_rng_state": torch.get_rng_state(), "cuda_rng_state": torch.cuda.get_rng_state()},
+                           output / "training_state.pt")
+                cache.commit()
             print(f"Validation step={step} KL={metrics['kl']:.6f} agreement={metrics['teacher_forced_top1_agreement']:.4f}", flush=True)
             student.train()
 
-        checkpoint(0)
-        order = list(range(500))
+        checkpoint(start_step)
+        order = list(range(train_count))
         random.Random(42).shuffle(order)
-        assert len(set(order)) == 500
+        assert len(set(order)) == train_count
         torch.cuda.reset_peak_memory_stats()
-        for step in range(1, 126):
-            if time.monotonic() - started > 450:
-                raise TimeoutError("Training stopped to respect the ten-minute GPU execution limit")
+        for local_step in range(1, steps + 1):
+            step = start_step + local_step
+            if time.monotonic() - started > job_limit - 150:
+                raise TimeoutError("Training stopped to respect the GPU execution limit")
             optimizer.zero_grad(set_to_none=True)
             mean_loss = 0.0
-            for index in order[(step - 1) * 4:step * 4]:
+            for index in order[(local_step - 1) * 4:local_step * 4]:
                 ids = torch.tensor([datasets["train"][index]["input_ids"]], device="cuda")
                 with torch.no_grad():
                     teacher_logits = target(ids, use_cache=False).logits
@@ -181,7 +213,9 @@ def train_and_evaluate(code_revision):
             result["train_history"].append(record)
             run.log({"optimizer_step": step, "train/kl": mean_loss,
                      "train/gradient_norm": record["gradient_norm"], "train/tokens_seen": record["tokens_seen"]})
-            if step % 25 == 0:
+            if local_step % 25 == 0:
+                print(f"Train step={step}/{start_step + steps} batch_KL={mean_loss:.6f}", flush=True)
+            if local_step % interval == 0 or local_step == steps:
                 checkpoint(step)
         assert not torch.equal(b_probe.detach(), initial_b), "Adapter weights did not change"
         assert torch.equal(next(target.parameters()).detach().flatten()[:16], teacher_probe)
@@ -220,7 +254,7 @@ def train_and_evaluate(code_revision):
                 modes = ["target", "original", "trained"]
                 rotation = (index + repetition) % 3
                 for mode in modes[rotation:] + modes[:rotation]:
-                    if time.monotonic() - started > 540:
+                    if time.monotonic() - started > job_limit - 60:
                         raise TimeoutError("Evaluation stopped before the GPU execution limit")
                     torch.cuda.synchronize()
                     tick = time.perf_counter()
@@ -283,10 +317,16 @@ def main():
     with modal.enable_output(), app.run():
         print("CPU training checks:", check_training.remote(), flush=True)
         result = train_and_evaluate.remote(revision)
+    save_result(result)
+
+
+def save_result(result, name="training"):
     output = ROOT / "results"
     output.mkdir(exist_ok=True)
-    (output / "training.json").write_text(json.dumps(result, indent=2) + "\n")
+    (output / f"{name}.json").write_text(json.dumps(result, indent=2) + "\n")
     adapters = output / f"adapters-{result['run_id']}"
+    if name != "training":
+        adapters /= name
     volume_path = Path(result["storage_path"]).relative_to("/cache")
     for name, expected in result["files"].items():
         path = adapters / name

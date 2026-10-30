@@ -74,7 +74,14 @@ def sample(source, count, tokenizer, seed, per_article=1, forbidden=()):
     selected, pending, seen = [], [], set()
     rejected = {"too_short_articles": 0, "duplicate_or_shared_passage_windows": 0}
     blocked = set(forbidden)
+    seen_titles, seen_articles = set(), set()
     for article in order:
+        title = normalized(article["title"])
+        if title in seen_titles or article["article_sha256"] in seen_articles:
+            rejected["duplicate_articles"] = rejected.get("duplicate_articles", 0) + 1
+            continue
+        seen_titles.add(title)
+        seen_articles.add(article["article_sha256"])
         ids = tokenizer.encode(article["text"], add_special_tokens=False)
         if len(ids) < WINDOW:
             rejected["too_short_articles"] += 1
@@ -123,9 +130,10 @@ def accept(row, blocked, seen):
     return True
 
 
-def validate(splits):
+def validate(splits, train_count=500):
     """Fail on source leakage, shared passages, bad lengths, or overlapping windows."""
-    expected = {"train": 500, "validation": 50, "test": 100}
+    expected = {"train": train_count, "validation": 50, "test": 100}
+    last_split = next(reversed(splits))
     titles, hashes, passages = set(), set(), set()
     for split, rows in splits.items():
         assert len(rows) == expected[split], (split, len(rows))
@@ -149,7 +157,9 @@ def validate(splits):
             assert not pieces & passages, f"Shared {SHINGLE}-token passage in {split}"
             current_titles.add(key)
             current_hashes.add(row["article_sha256"])
-            current_passages.update(pieces)
+            # No later split needs the final split's shingle index (large for training).
+            if split != last_split:
+                current_passages.update(pieces)
         assert max(map(len, spans.values())) <= (2 if split == "test" else 1)
         titles.update(current_titles)
         hashes.update(current_hashes)

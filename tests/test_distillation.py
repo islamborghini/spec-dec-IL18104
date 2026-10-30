@@ -57,6 +57,15 @@ class DistillationTest(unittest.TestCase):
         optimizer.step()
         self.assertTrue(any(torch.count_nonzero(p).item() for n, p in student.named_parameters() if "lora_B" in n))
         self.assertTrue(all(p.grad is None for p in teacher.parameters()))
+        with tempfile.TemporaryDirectory() as checkpoint_dir:
+            path = checkpoint_dir + "/training_state.pt"
+            torch.save({"optimizer": optimizer.state_dict(), "optimizer_step": 126}, path)
+            state = torch.load(path, weights_only=True)
+            restored_optimizer = torch.optim.AdamW(params, lr=1e-4)
+            restored_optimizer.load_state_dict(state["optimizer"])
+            self.assertEqual(state["optimizer_step"], 126)
+            for key, original_state in optimizer.state_dict()["state"].items():
+                torch.testing.assert_close(restored_optimizer.state_dict()["state"][key]["exp_avg"], original_state["exp_avg"])
         for name, value in student.get_base_model().state_dict().items():
             if "lora_" not in name:
                 self.assertTrue(torch.equal(value, base_state[name.replace(".base_layer", "")]))

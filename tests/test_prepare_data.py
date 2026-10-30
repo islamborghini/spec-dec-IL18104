@@ -44,6 +44,13 @@ class DataTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Only found 0 clean"):
             prep.sample(source, 1, FakeTokenizer(), 42, forbidden=blocked)
 
+    def test_repeated_article_titles_cannot_supply_multiple_training_windows(self):
+        source = [prep.make_article("Same title", i, i + 1,
+                                   [" ".join(str(j + i * 1000) for j in range(800))])
+                  for i in range(3)]
+        with self.assertRaisesRegex(ValueError, "Only found 1 clean"):
+            prep.sample(source, 2, FakeTokenizer(), 42)
+
     def test_committed_artifacts_pass_audit_and_hash_checks(self):
         root = Path(__file__).resolve().parents[1] / "data" / "pilot"
         self.assertTrue((root / "manifest.json").exists(), "Run prepare_data.py first")
