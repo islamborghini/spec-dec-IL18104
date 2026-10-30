@@ -110,7 +110,7 @@ def train_and_evaluate(code_revision, continuation=None):
     optimizer = torch.optim.AdamW(params, lr=1e-4, weight_decay=0.0)
     optimizer_restored = bool(continuation and continuation.get("optimizer_state_restored"))
     if optimizer_restored:
-        state_path = Path(continuation["checkpoint_dir"]) / "training_state.pt"
+        state_path = Path(continuation["optimizer_path"])
         assert hashlib.sha256(state_path.read_bytes()).hexdigest() == continuation["optimizer_sha256"]
         restore_training_state(optimizer, state_path, start_step)
         print(f"Restored Adam moments and RNG at optimizer update {start_step}", flush=True)

@@ -41,6 +41,7 @@ def resume_plan(report, latest_step, manifest):
     return {"run_id": RUN_ID, "start_step": 2625, "end_step": 10000, "train_chunks": 29500,
             "checkpoint_dir": report["storage_path"] + "/last",
             "checkpoint_sha256": {k.removeprefix("last/"): v for k, v in report["files"].items() if k.startswith("last/")},
+            "optimizer_path": report["storage_path"] + "/training_state.pt",
             "optimizer_sha256": report["files"]["training_state.pt"],
             "optimizer_state_restored": True, "data_sha256": manifest["file_sha256"]["train.jsonl"],
             "job_limit_seconds": 7200,
@@ -62,10 +63,10 @@ def preflight():
     manifest = json.loads(Path("/project/expanded/manifest.json").read_text())
     plan = resume_plan(report, latest, manifest)
     train.cache.reload()
-    paths = {**{f"last/{k}": v for k, v in plan["checkpoint_sha256"].items()},
-             "training_state.pt": plan["optimizer_sha256"]}
-    for name, expected in paths.items():
-        assert hashlib.sha256((Path(report["storage_path"]) / name).read_bytes()).hexdigest() == expected
+    paths = {**{Path(plan["checkpoint_dir"]) / k: v for k, v in plan["checkpoint_sha256"].items()},
+             Path(plan["optimizer_path"]): plan["optimizer_sha256"]}
+    for path, expected in paths.items():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
     return plan
 
 

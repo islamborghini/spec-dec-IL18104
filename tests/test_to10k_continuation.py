@@ -28,6 +28,8 @@ class ResumeTo10kTest(unittest.TestCase):
         self.assertTrue(plan["optimizer_state_restored"])
         self.assertEqual(plan["optimizer_sha256"], self.report["files"]["training_state.pt"])
         self.assertTrue(plan["checkpoint_dir"].endswith("continuation-126-2625/last"))
+        # Saved beside last/, not inside it; the trainer reads this exact path.
+        self.assertTrue(plan["optimizer_path"].endswith("continuation-126-2625/training_state.pt"))
 
     def test_refuses_stale_weights_changed_tests_and_failed_or_missing_audits(self):
         with self.assertRaises(ValueError):
