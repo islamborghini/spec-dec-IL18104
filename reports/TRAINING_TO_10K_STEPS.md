@@ -1,7 +1,35 @@
 # Continuation to 10,000 total optimizer updates
 
-Status: fresh data and local/remote CPU checks passed; GPU launch is next.
-Training completion and results have not yet been claimed.
+Status: **complete** (all 10,000 updates, W&B run `hkays15c`, A10). Raw results:
+[training-to-10k-steps.json](training-to-10k-steps.json).
+
+## Results
+
+First launch failed before W&B resume: the trainer read `training_state.pt`
+from inside `last/`, but it is saved beside it. Fixed in `ec41655`; relaunch
+restored Adam/RNG at update 2,625.
+
+Validation KL (50 fixed chunks): 1.065 (untrained) → 0.835 (125) → 0.757
+(2,625) → **0.724 best at 9,875**; 0.726 at 10,000. Flat after ~8,600.
+Teacher-forced top-1 agreement ends at 66.8%.
+
+Same job, 20 validation prompts × 2 repetitions, 64 tokens, k=4:
+
+| Setup | Tokens/s | Acceptance | Tokens / target pass |
+|---|---:|---:|---:|
+| Target-only | **33.03** | — | 1.00 |
+| Original drafter | 21.39 | 42.1% | 2.63 |
+| Update-2,625 drafter | 23.91 | 50.5% | 2.94 |
+| Update-9,875 drafter | 24.24 | 51.4% | 2.97 |
+
+Paired per-prompt timing: the 9,875 drafter beats the 2,625 drafter on 26/40
+pairs (median 1.02×; sign test p≈0.08, not significant), beats the original on
+38/40 (median 1.12×), and loses to target-only on 38/40 (median 0.72×).
+
+Reading: 3.8× more training bought ~1.4% throughput. Training is near its
+ceiling for this setup; the gap to target-only is drafter cost and k=4 (see
+[SPEED_DIAGNOSIS.md](SPEED_DIAGNOSIS.md)), not undertraining. BF16 mismatches
+(22/40 sequences) still block any lossless-speedup claim. Test set untouched.
 
 Prepared data: **29,500 chunks from 28,045 distinct training articles**, with
 1,448 repeated-passage candidates rejected. All six leakage/overlap audit counts
