@@ -3,8 +3,8 @@
 This project will test whether distilling a Qwen3-0.6B drafter toward a frozen
 Qwen3-4B target improves speculative decoding acceptance and generation speed.
 
-**Current stage: infrastructure and a fixed WikiText pilot dataset.** Decoding,
-training, and project evaluation are not implemented yet.
+**Current stage: infrastructure, a fixed WikiText pilot, and greedy baseline
+evaluation.** LoRA training is not implemented yet.
 The setup smoke test checks real BF16 computation on an A10 and records hardware
 measurements in W&B. It does not report training results.
 
@@ -68,6 +68,58 @@ missing permission as a setup failure, not a successful offline run.
 The A10 selection comes from a separate L4/A10 hardware benchmark using the
 planned model pair. It does not establish speculative decoding speedup or model
 quality; those still need to be measured in the project.
+
+## Run the k=4 validation baseline
+
+```sh
+MODAL_PROFILE=islam-95550 python baseline.py
+```
+
+Commit changes before launching so W&B records the exact code revision. The
+runner checks the workspace, W&B secret, and existing model-cache volume first.
+It runs tiny random-Qwen decoder tests on a CPU before allocating an A10. No
+test-set file is mounted or opened by this job.
+
+The GPU job loads the pinned Qwen3-4B target and original Qwen3-0.6B drafter in
+BF16 using SDPA, reusing the `spec-dec-benchmark-model-cache` volume from the
+hardware benchmark. Missing cached weights fail rather than starting a download
+on the GPU. Both models stay resident for all timings. It uses the first five
+fixed validation articles, their first 128 sampled token IDs as prompts, and up
+to 64 generated tokens per prompt, stopping on the target's EOS IDs.
+
+`decoding.py` implements batch-one, unpadded **greedy decoding only**. The target
+baseline uses a KV cache and one full-prompt prefill. Speculative decoding uses
+separate KV caches, four draft proposals per block (fewer at the output limit),
+one target verification call, an accepted prefix plus a correction/bonus token,
+and cache rollback on rejection. It preserves the final-token budget and EOS.
+Stochastic rejection sampling, quantization, and dynamic block sizes are outside
+this pilot.
+
+After checking the target loop against Transformers `generate()` on a real
+prompt, the job warms up both paths. It records two timed repetitions of each
+method on each prompt, alternating method order. Synchronized wall time includes
+prefill, all drafting/verification calls, cache management, and Python overhead;
+it excludes model loading, tokenization, W&B logging, and warm-up. This is a
+custom batch-one baseline, not a comparison with an optimized serving engine.
+
+W&B receives per-call TPS, a sample-output table, aggregate checks, acceptance,
+generated tokens per target verification, and a JSON artifact containing token
+IDs, timings, versions, hardware, and source provenance. The runner also saves
+`results/baseline.json` locally. TPS is total generated tokens divided by total
+timed seconds, not an average of individual TPS values. Acceptance is retained
+draft tokens divided by all proposed tokens; the correction/bonus contributes
+to generated tokens but not draft acceptance. Target verification counts exclude
+the initial prefill, and total forward-call counts are recorded separately.
+
+We report sequence and token-position mismatch rates. A nonzero mismatch gates
+the report's `verified_speedup` field to `null` pending investigation; numerical
+effects may explain differences, but a faster mismatching run is not presented
+as a verified acceleration. Five articles and two repetitions are a smoke
+benchmark, not a final uncertainty estimate or block-size selection.
+
+The GPU function has a **600-second execution timeout**, no retries, one
+container, and rapid scale-down. Startup and model loading are billable; the
+timeout is not a dollar spending cap. The job performs no training or k sweep.
 
 ## Fixed WikiText pilot
 
@@ -135,4 +187,8 @@ These checks require no API keys, downloads, or GPU. They exercise article
 boundaries, reproducibility, leakage guards, and the committed dataset checksums,
 and verify that the runner stops before launching a cloud app when the workspace
 is wrong or the W&B secret is missing.
+Four tiny-Qwen cache tests are skipped locally when PyTorch is absent; the
+baseline runner executes them on Modal CPU and requires all decoder checks to
+pass without skips before starting a GPU. Decoder caching follows the pinned
+[Transformers cache API](https://huggingface.co/docs/transformers/v4.57.3/en/kv_cache).
 The remote smoke test above checks the actual GPU and online W&B connection.
