@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Speculative decoding · comparison replay</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0a0d12; --surface:#11161f; --line:#26303e; --text:#edf2fa; --muted:#a1adbf; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:1600px; margin:auto; padding:24px 30px 18px; }
+    header { display:flex; justify-content:space-between; gap:20px; align-items:center; margin-bottom:18px; }
+    .eyebrow { color:var(--muted); font-size:11px; letter-spacing:.18em; text-transform:uppercase; }
+    h1 { margin:4px 0 0; font-size:26px; font-weight:600; letter-spacing:-.035em; }
+    .badge { border:1px solid #655534; border-radius:5px; background:#30291b; color:#f3cf88; padding:6px 10px; font-size:11px; font-weight:600; letter-spacing:.08em; white-space:nowrap; }
+    .toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:14px 0; }
+    .controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    button,select { font:inherit; color:var(--text); background:#19212d; border:1px solid #364356; border-radius:6px; padding:8px 12px; }
+    button { cursor:pointer; }
+    button:disabled { opacity:.4; cursor:default; }
+    button:focus-visible,select:focus-visible { outline:2px solid #8bdac5; outline-offset:3px; }
+    .primary { background:#a7eed8; color:#0b2621; border-color:#a7eed8; font-weight:600; min-width:130px; }
+    .clock { display:flex; align-items:center; gap:12px; color:var(--muted); }
+    .clock strong { color:var(--text); font:500 16px ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+    .prompt { background:var(--surface); border:1px solid var(--line); border-radius:9px; padding:12px 16px; }
+    .prompt label { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.12em; display:block; }
+    #prompt { margin:5px 0 0; max-height:60px; overflow:auto; color:#dce5f2; font-size:14px; }
+    #description { color:var(--muted); margin:0 0 13px; font-size:12px; }
+    .panels { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
+    .panel { background:var(--surface); border:1px solid var(--line); border-radius:10px; min-width:0; overflow:hidden; --accent:#a3adbc; }
+    .panel.target { --accent:#8ab8ff; }
+    .panel.original { --accent:#efbb83; }
+    .panel.trained { --accent:#91dfbf; }
+    .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:14px 17px 11px; border-bottom:1px solid var(--line); }
+    .model-label { display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; }
+    .dot { width:7px; height:7px; background:var(--accent); border-radius:50%; flex-shrink:0; }
+    .model-detail { font-size:11px; color:var(--muted); margin-top:4px; }
+    .rate { text-align:right; white-space:nowrap; font-size:23px; font-weight:500; letter-spacing:-.04em; font-variant-numeric:tabular-nums; line-height:1.1; }
+    .rate span { font-size:11px; letter-spacing:0; color:var(--muted); }
+    .rate-note { text-align:right; color:var(--muted); font-size:10px; margin-top:5px; }
+    .output { height:220px; padding:15px 17px; overflow:auto; font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; color:#d4deeb; scrollbar-color:#3a485b transparent; }
+    .output.waiting { color:#79869b; }
+    .panel-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 17px 11px; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+    .panel-status { color:var(--accent); }
+    .track { height:3px; background:#202937; }
+    .fill { width:0; height:100%; background:var(--accent); }
+    footer { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; color:#8f9db1; font-size:11px; padding-top:14px; }
+    footer a { color:#b7c5d9; text-decoration:underline; text-underline-offset:3px; }
+    footer p { margin:0; max-width:1000px; }
+    details { margin-top:12px; color:var(--muted); font-size:12px; }
+    summary { cursor:pointer; }
+    details p { max-width:1000px; }
+    .screen-reader { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+    @media(min-width:1500px) { .output { height:260px; } }
+    @media(max-width:750px) { main { padding:18px 14px; } header { align-items:flex-start; flex-direction:column; gap:10px; } .panels { grid-template-columns:1fr; } footer { flex-direction:column; } .output { height:200px; } h1 { font-size:24px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">IL18104 / probability distillation</div><h1>One prompt. Four decoding paths.</h1></div>
+    <div class="badge" id="badge">SIMULATED PLAYBACK · NOT LIVE</div>
+  </header>
+  <section class="prompt" aria-label="Shared prompt"><label>Shared prompt</label><p id="prompt"></p></section>
+  <div class="toolbar">
+    <div class="controls">
+      <label for="mode" class="screen-reader">Playback content</label>
+      <select id="mode"><option value="illustrative">2,000-token illustration</option><option value="recorded">Real recorded sample · 64 tokens</option></select>
+      <button class="primary" id="start" type="button">Start replay</button>
+      <button id="pause" type="button" disabled>Pause</button>
+      <button id="reset" type="button">Reset</button>
+      <button id="fullscreen" type="button">Full screen</button>
+    </div>
+    <div class="clock"><span id="status" role="status" aria-live="polite">Ready</span><strong id="elapsed">00:00.0</strong></div>
+  </div>
+  <p id="description"></p>
+  <section class="panels" aria-label="Four model playback panels">
+    <article class="panel base" data-mode="base">
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Base drafter alone</div><div class="model-detail">Qwen3-0.6B · no target verification</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Illustrative rate · not benchmarked</div></div></div>
+      <div class="output waiting" aria-label="Base drafter output"></div>
+      <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
+    </article>
+    <article class="panel target" data-mode="target">
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Target model alone</div><div class="model-detail">Qwen3-4B · autoregressive baseline</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="output waiting" aria-label="Target model output"></div>
+      <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
+    </article>
+    <article class="panel original" data-mode="original">
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · before training</div><div class="model-detail">Original Qwen3-0.6B → Qwen3-4B · k=4</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="output waiting" aria-label="Original speculative output"></div>
+      <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
+    </article>
+    <article class="panel trained" data-mode="trained">
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · after training</div><div class="model-detail">Distilled drafter → Qwen3-4B · k=4 · update 9,875</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="output waiting" aria-label="Trained speculative output"></div>
+      <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
+    </article>
+  </section>
+  <footer><p id="disclosure"></p><a href="https://github.com/islamborghini/spec-dec-IL18104" target="_blank" rel="noopener noreferrer">Project & results ↗</a></footer>
+  <details><summary>Playback provenance</summary><p>Target and speculative rates are pooled measurements from one A10/BF16 job: 20 validation prompts, two repetitions, 128 prompt tokens, and up to 64 output tokens. They are reference rates, not measurements of this animation or of 2,000-token generation. The standalone 0.6B rate is an illustrative 45 tokens/sec. Recorded mode uses the first prompt's actual saved outputs; a standalone drafter output was not recorded. Numerical mismatches remain, so the project makes no verified lossless-speedup claim.</p><p><a href="https://forge.coreweave.com/wandb/islamassanov66-minerva-university/speculative-decoding/runs/hkays15c" target="_blank" rel="noopener noreferrer">Training run in W&B</a></p></details>
+</main>
+<script src="data.js"></script>
+<script src="replay.js"></script>
+</body>
+</html>

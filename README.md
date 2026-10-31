@@ -25,6 +25,13 @@ measurements in W&B. It does not report training results.
 Historical reports preserve their original measurements. Read the speed
 diagnosis before interpreting the modest gains from additional training.
 
+## Four-panel recording demo
+
+Run `python3 -m http.server 8765 --bind 127.0.0.1 --directory demo` and open
+<http://127.0.0.1:8765>. The [demo](demo/README.md) has a labeled 2,000-token
+illustration and a separate mode for real saved 64-token outputs. Streaming is
+simulated; it allocates no GPU and does not measure long-output performance.
+
 ## Install the local runner
 
 Use Python 3.10 or newer. The local dependencies cover Modal and CPU-only data
