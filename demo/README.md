@@ -1,4 +1,4 @@
-# Four-panel comparison playback
+# Four-panel recorded inference
 
 From the repository root:
 
@@ -7,27 +7,40 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory demo
 ```
 
 Open <http://127.0.0.1:8765>, click **Start replay**, and optionally use
-**Full screen** while recording. **Pause**, **Resume**, and **Reset** control
-playback. No GPU, model inference, API key, or external script is used.
+**Full screen** while recording. Pause, Resume, and Reset control playback.
+No GPU or credentials are needed to replay the committed assets.
 
-The default mode streams the same **2,000-token authored illustrative text** in
-four panels at constant playback rates. It is visibly labeled simulated and
-is not evidence of 2,000-token model quality or performance. Target, original
-speculative, and trained speculative reference rates come from the same saved
-20-prompt A10 job, with k=4 and up to 64 output tokens. The standalone 0.6B
-rate is **illustrative and unmeasured**, and is labeled that way.
+All four panels use actual model outputs and synchronized emission timestamps
+from one A10 capture. Starts are aligned for comparison; inference was performed
+**sequentially**, not concurrently. Playback runs at 1×, preserves speculative
+bursts, and shows each method's measured average tokens/sec. The shared prompt
+has a 2,000-token generation budget; EOS can stop a model earlier. Outputs are
+never padded or replaced with authored text.
 
-Recorded mode replays the first validation prompt's actual target, original,
-and trained outputs from `reports/training-to-10k-steps.json`. These are only
-64 tokens. The base-drafter panel says no sample was recorded instead of
-inventing a model output. Playback timing is simulated in both modes.
+The standalone base is Qwen3-0.6B; target-only is Qwen3-4B; both speculative
+methods use k=4, before training versus the selected update-9,875 adapter.
+This chat-formatted prompt is a demonstration, not the WikiText validation
+benchmark. BF16 output mismatches remain possible: inspect the recorded match
+checks before making any claim about equivalence. Recording adds synchronization
+and callback overhead; timings include prefill but exclude loading and warmup.
 
-`data.js` is committed so playback works without Python dependencies. To rebuild
-it from the existing reports and cached tokenizer:
+Raw token IDs, events, model pins, adapter hash and runtime versions are saved in
+`reports/demo-recording.json`. See `reports/DEMO_RECORDING.md` for the results.
+To rebuild browser assets from that recording and the locally cached tokenizer:
 
 ```sh
 .venv/bin/python demo/build_data.py
 ```
 
-Keep the playback labels visible in a demo recording. Show the actual result
-tables or W&B curves separately when explaining measured performance.
+To make a **new paid GPU recording** (requires authorized Modal credentials,
+cached models and the selected adapter in the existing volume, and clean git):
+
+```sh
+MODAL_PROFILE=islam-95550 .venv/bin/python record_demo.py
+.venv/bin/python demo/build_data.py
+```
+
+The capture performs decoder checks first, runs one bounded A10 job, and saves
+the raw output locally and in the Modal volume. It creates no W&B training run.
+Keep the recorded-playback label visible in the video. Show the validation
+results and training curves separately when discussing the broader experiment.

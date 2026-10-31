@@ -28,9 +28,10 @@ diagnosis before interpreting the modest gains from additional training.
 ## Four-panel recording demo
 
 Run `python3 -m http.server 8765 --bind 127.0.0.1 --directory demo` and open
-<http://127.0.0.1:8765>. The [demo](demo/README.md) has a labeled 2,000-token
-illustration and a separate mode for real saved 64-token outputs. Streaming is
-simulated; it allocates no GPU and does not measure long-output performance.
+<http://127.0.0.1:8765>. The [demo](demo/README.md) replays actual outputs and emission timestamps
+for all four methods at 1×, with a 2,000-token budget and natural EOS stopping.
+The methods were recorded separately on one A10; starts are aligned in playback.
+Replaying needs no GPU. This single prompt is separate from the validation benchmark.
 
 ## Install the local runner
 

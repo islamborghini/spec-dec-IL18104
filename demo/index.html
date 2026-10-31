@@ -59,13 +59,11 @@
 <main>
   <header>
     <div><div class="eyebrow">IL18104 / probability distillation</div><h1>One prompt. Four decoding paths.</h1></div>
-    <div class="badge" id="badge">SIMULATED PLAYBACK · NOT LIVE</div>
+    <div class="badge" id="badge">RECORDED PLAYBACK · NOT LIVE</div>
   </header>
   <section class="prompt" aria-label="Shared prompt"><label>Shared prompt</label><p id="prompt"></p></section>
   <div class="toolbar">
     <div class="controls">
-      <label for="mode" class="screen-reader">Playback content</label>
-      <select id="mode"><option value="illustrative">2,000-token illustration</option><option value="recorded">Real recorded sample · 64 tokens</option></select>
       <button class="primary" id="start" type="button">Start replay</button>
       <button id="pause" type="button" disabled>Pause</button>
       <button id="reset" type="button">Reset</button>
@@ -76,30 +74,30 @@
   <p id="description"></p>
   <section class="panels" aria-label="Four model playback panels">
     <article class="panel base" data-mode="base">
-      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Base drafter alone</div><div class="model-detail">Qwen3-0.6B · no target verification</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Illustrative rate · not benchmarked</div></div></div>
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Base drafter alone</div><div class="model-detail">Qwen3-0.6B · no target verification</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured during this capture</div></div></div>
       <div class="output waiting" aria-label="Base drafter output"></div>
       <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
     </article>
     <article class="panel target" data-mode="target">
-      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Target model alone</div><div class="model-detail">Qwen3-4B · autoregressive baseline</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Target model alone</div><div class="model-detail">Qwen3-4B · autoregressive baseline</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured during this capture</div></div></div>
       <div class="output waiting" aria-label="Target model output"></div>
       <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
     </article>
     <article class="panel original" data-mode="original">
-      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · before training</div><div class="model-detail">Original Qwen3-0.6B → Qwen3-4B · k=4</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · before training</div><div class="model-detail">Original Qwen3-0.6B → Qwen3-4B · k=4</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured during this capture</div></div></div>
       <div class="output waiting" aria-label="Original speculative output"></div>
       <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
     </article>
     <article class="panel trained" data-mode="trained">
-      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · after training</div><div class="model-detail">Distilled drafter → Qwen3-4B · k=4 · update 9,875</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured benchmark reference</div></div></div>
+      <div class="panel-head"><div><div class="model-label"><span class="dot"></span>Speculative · after training</div><div class="model-detail">Distilled drafter → Qwen3-4B · k=4 · update 9,875</div></div><div><div class="rate" data-rate>—</div><div class="rate-note">Measured during this capture</div></div></div>
       <div class="output waiting" aria-label="Trained speculative output"></div>
       <div class="panel-foot"><span class="panel-status">Ready</span><span class="count">0 / 2,000 tokens</span></div><div class="track"><div class="fill"></div></div>
     </article>
   </section>
   <footer><p id="disclosure"></p><a href="https://github.com/islamborghini/spec-dec-IL18104" target="_blank" rel="noopener noreferrer">Project & results ↗</a></footer>
-  <details><summary>Playback provenance</summary><p>Target and speculative rates are pooled measurements from one A10/BF16 job: 20 validation prompts, two repetitions, 128 prompt tokens, and up to 64 output tokens. They are reference rates, not measurements of this animation or of 2,000-token generation. The standalone 0.6B rate is an illustrative 45 tokens/sec. Recorded mode uses the first prompt's actual saved outputs; a standalone drafter output was not recorded. Numerical mismatches remain, so the project makes no verified lossless-speedup claim.</p><p><a href="https://forge.coreweave.com/wandb/islamassanov66-minerva-university/speculative-decoding/runs/hkays15c" target="_blank" rel="noopener noreferrer">Training run in W&B</a></p></details>
+  <details><summary>Playback provenance</summary><p id="provenance"></p><p><a href="https://forge.coreweave.com/wandb/islamassanov66-minerva-university/speculative-decoding/runs/hkays15c" target="_blank" rel="noopener noreferrer">Training run in W&B</a></p></details>
 </main>
-<script src="data.js"></script>
-<script src="replay.js"></script>
+<script src="cached-data.js"></script>
+<script src="cached-replay.js"></script>
 </body>
 </html>
