@@ -91,6 +91,24 @@ class TinyQwenTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             greedy_decode(self.target, torch.tensor([[1], [2]]), 2)
 
+    def test_stream_callbacks_match_outputs_and_keep_speculative_bursts(self):
+        import torch
+
+        prompt = torch.tensor([[1, 2, 3]])
+        chunks = []
+        result = speculative_decode(self.target, self.target, prompt, 12, 4, on_tokens=chunks.append)
+        self.assertEqual([token for chunk in chunks for token in chunk], result["token_ids"])
+        self.assertEqual(list(map(len, chunks)), [5, 5, 2])
+        singles = []
+        greedy = greedy_decode(self.target, prompt, 12, on_tokens=singles.append)
+        self.assertEqual([token for chunk in singles for token in chunk], greedy["token_ids"])
+        self.assertEqual(greedy["token_ids"], result["token_ids"])
+        self.assertTrue(all(len(chunk) == 1 for chunk in singles))
+        empty = []
+        speculative_decode(self.target, self.target, prompt, 0, 4, on_tokens=empty.append)
+        greedy_decode(self.target, prompt, 0, on_tokens=empty.append)
+        self.assertEqual(empty, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,7 @@ def check_inputs(prompt, max_new_tokens):
         raise ValueError("max_new_tokens must be nonnegative")
 
 
-def greedy_decode(target, prompt, max_new_tokens, eos_ids=()):
+def greedy_decode(target, prompt, max_new_tokens, eos_ids=(), *, on_tokens=None):
     """Optimized target-only baseline: one prefill, then one token per call."""
     import torch
 
@@ -41,12 +41,14 @@ def greedy_decode(target, prompt, max_new_tokens, eos_ids=()):
             token = inputs.item()
             generated.append(token)
             calls += 1
+            if on_tokens is not None:
+                on_tokens((token,))
             if token in eos_ids:
                 break
     return {"token_ids": generated, "target_forward_calls": calls}
 
 
-def speculative_decode(target, drafter, prompt, max_new_tokens, k=4, eos_ids=()):
+def speculative_decode(target, drafter, prompt, max_new_tokens, k=4, eos_ids=(), *, on_tokens=None):
     """Verify k proposals in one target call; discard rejected cached states."""
     import torch
     from transformers import DynamicCache
@@ -95,6 +97,8 @@ def speculative_decode(target, drafter, prompt, max_new_tokens, k=4, eos_ids=())
             proposed += count
             passes += 1
             target_calls += 1
+            if on_tokens is not None:
+                on_tokens(tuple(emitted))
             if emitted[-1] in eos_ids:
                 break
     return {"token_ids": generated, "accepted_draft_tokens": accepted,
