@@ -1,342 +1,277 @@
-# Speculative decoding — IL18104
+# Learning a drafter for speculative decoding
 
-This project will test whether distilling a Qwen3-0.6B drafter toward a frozen
-Qwen3-4B target improves speculative decoding acceptance and generation speed.
+An IL18104 Deep Learning project testing whether probability distillation can
+make a small language model a better drafter for speculative decoding.
 
-**Current stage: completed 500-chunk pilot, 10k-chunk continuation, and speed
-diagnosis. Speculative decoding remains slower than target-only generation.**
-The setup smoke test checks real BF16 computation on an A10 and records hardware
-measurements in W&B. It does not report training results.
+A frozen **Qwen3-4B** target verifies proposals from **Qwen3-0.6B**. I train
+LoRA adapters on the drafter to match the target's next-token distributions,
+then compare the original and trained drafters using the same decoding code.
 
-## Documentation
+**Current result:** 10,000 optimizer updates improved validation alignment and
+draft acceptance. Trained speculative decoding is faster than speculative
+decoding with the original drafter, but remains slower than target-only
+inference in the measured setup. Output mismatches remain unresolved, so this
+project does **not** claim a verified lossless speedup.
 
-- [Project guide](docs/PROJECT_GUIDE.md): objective, architecture, data, training,
-  evaluation, W&B/checkpoints, infrastructure, incidents, and current limitations.
-- [Demo submission plan](docs/DEMO_PLAN.md): completed work, remaining deliverables,
-  and a recording outline.
-- [Baseline and numerical checks](reports/BASELINE.md).
-- [500-chunk training pilot](reports/TRAINING.md).
-- [10k training continuation](reports/TRAINING_10K.md).
-- [Speed diagnosis](reports/SPEED_DIAGNOSIS.md): same-job checkpoint comparison,
-  k sweep, forward timings, repetitive outputs, and next experiments.
-- [Continuation to 10,000 optimizer steps](reports/TRAINING_TO_10K_STEPS.md):
-  fresh-data audit, exact optimizer resume, experiment plan, and run status.
+[Training curves and artifacts in W&B](https://wandb.ai/islamassanov66-minerva-university/speculative-decoding/runs/hkays15c)
+· [Detailed experiment report](reports/TRAINING_TO_10K_STEPS.md)
+· [Recorded demo results](reports/DEMO_RECORDING.md)
 
-Historical reports preserve their original measurements. Read the speed
-diagnosis before interpreting the modest gains from additional training.
+## Try the recorded demo — no GPU required
 
-## Four-panel recording demo
+From the repository root, run:
 
-Run `python3 -m http.server 8765 --bind 127.0.0.1 --directory demo` and open
-<http://127.0.0.1:8765>. The [demo](demo/README.md) replays actual outputs and emission timestamps
-for all four methods at 1×, with a 2,000-token budget and natural EOS stopping.
-The methods were recorded separately on one A10; starts are aligned in playback.
-Replaying needs no GPU. This single prompt is separate from the validation benchmark.
+```sh
+python3 -m http.server 8765 --bind 127.0.0.1 --directory demo
+```
 
-## Install the local runner
+Open <http://127.0.0.1:8765/> and click **Start replay**. A wide desktop browser
+shows four panels in a two-by-two grid; narrow windows stack them vertically.
 
-Use Python 3.10 or newer. The local dependencies cover Modal and CPU-only data
-preparation; PyTorch and W&B are installed in the remote container.
+| Panel | What runs in the original recording |
+|---|---|
+| Base drafter alone | Original Qwen3-0.6B generates independently, without verification |
+| Target model alone | Qwen3-4B generates autoregressively; the speed baseline |
+| Speculative, before training | Qwen3-4B verifies proposals from the original drafter |
+| Speculative, after training | Qwen3-4B verifies proposals from the selected trained drafter |
+
+The page replays **actual cached text and synchronized emission timestamps at
+1× speed**, including speculative token bursts. Rates are measured averages
+from that capture. The methods ran separately on one A10; their starts are
+aligned in playback. This is recorded inference, not four live GPU jobs.
+
+All methods received the same chat-formatted prompt with thinking disabled and
+a 2,000-token output budget. The standalone models stopped at EOS before that
+budget; speculative outputs reached the limit. Text is not padded or replaced.
+This single prompt demonstrates behavior; it is separate from the WikiText
+validation benchmark below. See [demo/README.md](demo/README.md) for rebuilding
+the assets or making a new GPU recording.
+
+## Results so far
+
+The main comparison uses **20 fixed validation prompts, two timing repetitions,
+128 prompt tokens, and up to 64 output tokens** on an NVIDIA A10, in BF16 with
+SDPA. Both speculative methods use four draft tokens per verification (`k=4`).
+Rows below come from the same evaluation job.
+
+| Method | Tokens/sec ↑ | Retained draft acceptance ↑ | Output tokens / verification ↑ |
+|---|---:|---:|---:|
+| Target-only | **33.03** | — | — |
+| Original drafter + target | 21.39 | 42.1% | 2.63 |
+| Drafter at update 2,625 + target | 23.91 | 50.5% | 2.94 |
+| Selected drafter at update 9,875 + target | **24.24** | **51.4%** | **2.97** |
+
+On 50 fixed validation chunks, KL fell from **1.065 to 0.724**. Teacher-forced
+top-1 agreement ended at approximately **66.8%**. The selected checkpoint is
+update **9,875**, chosen by lowest validation KL; training completed update
+10,000.
+
+These results show improved imitation and acceptance, with diminishing gains
+from later training. They do not establish that further training cannot help.
+The final evaluation reports **22/40 sequence mismatches** between trained
+speculative and target-only outputs; `verified_speedup` remains `null`.
+[Raw results](reports/training-to-10k-steps.json) include token IDs, timings,
+checkpoint hashes, and configuration.
+
+A separate validation sweep of `k ∈ {1, 2, 4, 8}` found `k=1` fastest at
+**29.15 tokens/sec**, versus **33.67 target-only** in that sweep's job. None of
+the tested settings beat target-only in aggregate. Do not combine absolute
+throughput across different jobs to estimate a training effect.
+[Raw sweep](reports/k-sweep.json) · [Speed diagnosis](reports/SPEED_DIAGNOSIS.md)
+
+## How it works
+
+**Training:** the target stays frozen. On existing WikiText prefixes, the
+drafter learns to minimize `KL(target || drafter)` over the full shared
+next-token vocabulary, averaged over chunk positions. This is probability
+distillation, not activation matching or training on generated answers.
+
+**Inference:** the drafter proposes up to `k` tokens. The target verifies the
+block in one forward pass. The decoder retains the matching prefix and emits
+a target correction or bonus token, then adjusts the caches for the next
+round. Both models maintain separate KV caches. The original and trained
+drafters use the same inference path; trained adapters are merged before timing.
+
+The implementation is **greedy, batch-one, unpadded decoding**. It does not
+implement stochastic speculative rejection sampling, dynamic draft lengths,
+quantization, or an optimized serving engine. Draft length is an inference
+setting, not the number of training adapters.
+
+## Data and training
+
+Data comes from pinned **WikiText-103 raw** splits, tokenized with the shared
+Qwen tokenizer. Training chunks contain **256 tokens** without a chat template.
+Generation prompts are text extracts to continue, rather than questions.
+
+| Training phase | Chunks in one pass | Added optimizer updates | Total updates |
+|---|---:|---:|---:|
+| Pilot | 500 | 125 | 125 |
+| Expanded training | 10,000 | 2,500 | 2,625 |
+| Fresh-data continuation | 29,500 | 7,375 | 10,000 |
+
+The expanded phase includes the original 500 chunks. Overall there were
+**40,000 chunk exposures, 39,500 unique chunks, and 10.24 million token
+positions processed**. This is three staged passes over differently sized
+datasets, not three epochs over one fixed dataset.
+
+- **Optimizer:** AdamW, learning rate `1e-4`, zero weight decay, gradient clipping
+  at 1.0; microbatch one with four accumulation steps per optimizer update.
+- **LoRA:** rank 8, alpha 16, dropout 0, query/value projections only;
+  1,146,880 trainable parameters.
+- **Resume:** the first expansion restored adapter weights but reset Adam.
+  The final continuation restored adapter weights, Adam state, and RNG state.
+  Both continuations logged to the same W&B run, `hkays15c`.
+- **Selection:** 50 fixed validation chunks monitor KL and choose checkpoints.
+  The 100 frozen test prompts have not been used for generation evaluation.
+
+Sampling is seeded and shuffled across articles. Manifests record source spans,
+model/tokenizer revisions, seeds, checksums, and overlap audits. The final
+29,500 chunks exclude previous training spans and shared 32-token passages, as
+well as passages from all official evaluation articles. Validation/test files
+remain unchanged. These checks do not rule out paraphrases or exposure during
+Qwen's original pretraining.
+
+Prepared data and audit details:
+[data/pilot](data/pilot/manifest.json),
+[data/wikitext-10k](data/wikitext-10k/manifest.json), and
+[data/wikitext-fresh-to-10k-steps](data/wikitext-fresh-to-10k-steps/manifest.json).
+
+## Inspect and reproduce
+
+### Local setup and checks
+
+Use Python 3.10 or newer:
 
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
 ```
 
-Authenticate the `islam-95550` Modal workspace without changing an existing
-default profile:
+The local suite checks data provenance/leakage guards, resume safeguards,
+decoder bookkeeping, and reconstruction of recorded output. Torch/PEFT-dependent
+checks skip if those packages are absent locally; the training and baseline
+runners execute their relevant checks on Modal CPU before GPU allocation.
+
+The committed JSON reports and browser assets can be inspected without GPU
+access or W&B credentials. Runtime training curves live in the linked W&B run;
+`train/gradient_norm` is measured **before** clipping, and validation top-1
+agreement uses fixed real-text prefixes rather than free-generation acceptance.
+
+### GPU runs on Modal
+
+The existing runners are configured for workspace **`islam-95550`**, W&B entity
+**`islamassanov66-minerva-university`**, and project **`speculative-decoding`**.
+For another account, update the configuration in `modal_app.py` and relevant
+run/checkpoint references before running cloud jobs.
+
+Authenticate without changing another default profile:
 
 ```sh
 modal token new --profile islam-95550 --no-activate
 ```
 
-The workspace must be eligible for GPU usage. Modal may require a payment method
-even when using included credits.
-
-## Connect W&B
-
-1. Get an API key from your [W&B account settings](https://wandb.ai/settings).
-2. In the [Modal Secrets panel](https://modal.com/secrets/islam-95550/main), create
-   a secret named **`wandb`** containing **`WANDB_API_KEY`** with that value.
-3. Use a W&B account with write access to the
-   **`islamassanov66-minerva-university`** entity.
-
-The W&B project name is **`speculative-decoding`**. The first successful run
-creates the project if it does not exist and the account has permission.
-Credentials stay in Modal Secrets; never put an API key in source code, command
-history, a notebook, or a Git commit.
-
-## Run the setup smoke test
+Create a Modal secret named **`wandb`** containing **`WANDB_API_KEY`**, using an
+account with access to the W&B entity. Keep credentials out of the repository.
+Then the infrastructure smoke check can be run with:
 
 ```sh
 MODAL_PROFILE=islam-95550 python modal_app.py
 ```
 
-Expected result:
+Expected: an A10 BF16 matrix check passes, a W&B setup run is recorded, and
+hardware/check results are written to `results/setup.json`.
 
-- The local runner verifies the workspace and required secret before building
-  the image or allocating a GPU.
-- A remote A10 executes a small BF16 matrix multiplication and checks its output.
-- A completed W&B run named `a10-setup-smoke`, with job type `setup`, records
-  `gpu/total_gib`, `gpu/free_gib`, and `checks/cuda_matmul_passed=1`.
-- The terminal prints the GPU name, measurements, and W&B run URL. The same data
-  is saved locally to `results/setup.json` (ignored by Git).
-- The ephemeral app stops when the command completes; no persistent deployment
-  or model training is started.
+**Model runs additionally require the existing Modal volume
+`spec-dec-benchmark-model-cache`, populated with the pinned model snapshots.**
+The current model loaders use cached weights and fail if they are missing; a
+fresh clone alone does not provision this cache. Continuations and trained
+inference also require saved adapters/checkpoints in that volume. Weight files
+are not included in Git; reports record their hashes and storage paths, and
+training artifacts are linked through W&B.
 
-The function has a two-minute execution timeout, no automatic retries, and one
-container maximum. Image building and startup add time beyond the function's
-execution; Modal charges for allocated resources. Treat a failed W&B login or
-missing permission as a setup failure, not a successful offline run.
+| Entry point | Purpose / expected output |
+|---|---|
+| `prepare_data.py` | Rebuild the 500/50/100 pilot splits and manifest on CPU |
+| `prepare_10k.py` | Rebuild the expanded 10,000-chunk training dataset |
+| `prepare_fresh.py` | Rebuild the audited 29,500 fresh training chunks |
+| `baseline.py` | Small five-prompt validation baseline → `results/baseline.json` |
+| `train.py` | New 500-chunk pilot → `results/training.json` and adapters |
+| `continue_training.py` | Historical update-125 → 2,625 continuation |
+| `continue_to_10k.py` | Historical update-2,625 → 10,000 continuation |
+| `diagnose_numerics.py` / `diagnose_speed.py` | Numerical checks / inference timing diagnosis |
+| `k_sweep.py` | Selected-adapter validation sweep → `reports/k-sweep.json` |
+| `record_demo.py` | New real four-method capture → `reports/demo-recording.json` |
 
-The A10 selection comes from a separate L4/A10 hardware benchmark using the
-planned model pair. It does not establish speculative decoding speedup or model
-quality; those still need to be measured in the project.
+Run GPU entry points as `MODAL_PROFILE=islam-95550 python <script>.py` after
+checking their prerequisites. Data preparation uses CPU and may download the
+pinned dataset/tokenizers; committed data is ready to inspect without rebuilding.
+The continuation scripts are **phase-specific**, require matching saved state
+and W&B history, and intentionally reject rerunning completed phases. They are
+not generic commands to resume the current run from any step. Runners that
+require a clean Git tree refuse uncommitted changes.
 
-## Run the k=4 validation baseline
+Cloud commands allocate paid resources; function timeouts are not dollar caps.
+Reports under `reports/` preserve completed experiments, while most local
+`results/` outputs are ignored by Git. Some diagnostic commands write directly
+to report files; preserve existing measurements before rerunning them.
 
-```sh
-MODAL_PROFILE=islam-95550 python baseline.py
-```
+## Evaluation and limitations
 
-Commit changes before launching so W&B records the exact code revision. The
-runner checks the workspace, W&B secret, and existing model-cache volume first.
-It runs tiny random-Qwen decoder tests on a CPU before allocating an A10. No
-test-set file is mounted or opened by this job.
+Throughput is total generated tokens divided by total synchronized elapsed
+time. Validation timing includes prefill and decoding, excludes loading,
+tokenization, warmup, and W&B logging, and rotates method order. Acceptance is
+retained draft tokens divided by proposed draft tokens; correction/bonus tokens
+count toward output but not acceptance. Verification counts exclude prefill.
 
-The GPU job loads the pinned Qwen3-4B target and original Qwen3-0.6B drafter in
-BF16 using SDPA, reusing the `spec-dec-benchmark-model-cache` volume from the
-hardware benchmark. Missing cached weights fail rather than starting a download
-on the GPU. Both models stay resident for all timings. It uses the first five
-fixed validation articles, their first 128 sampled token IDs as prompts, and up
-to 64 generated tokens per prompt, stopping on the target's EOS IDs.
+The key limitations are:
 
-`decoding.py` implements batch-one, unpadded **greedy decoding only**. The target
-baseline uses a KV cache and one full-prompt prefill. Speculative decoding uses
-separate KV caches, four draft proposals per block (fewer at the output limit),
-one target verification call, an accepted prefix plus a correction/bonus token,
-and cache rollback on rejection. It preserves the final-token budget and EOS.
-Stochastic rejection sampling, quantization, and dynamic block sizes are outside
-this pilot.
+- **Numerical equivalence:** output mismatches remain. BF16 sensitivity is a
+  candidate explanation, not proof that every difference is harmless.
+- **Benchmark scope:** short Wikipedia continuations on one GPU family, batch
+  size one, with only 20 validation prompts and repeated measurements. Repetitive
+  outputs can inflate acceptance. This does not establish chat/code performance.
+- **Inference cost:** an earlier instrumented subset spent about 70% of elapsed
+  time inside drafter decode forwards. Kernel-level causes have not been isolated;
+  a small parameter count alone does not guarantee a cheap decoding step.
+- **Long outputs:** the browser capture is a single chat example with different
+  output lengths, not a controlled long-context or long-generation benchmark.
 
-After checking the target loop against Transformers `generate()` on a real
-prompt, the job warms up both paths. It records two timed repetitions of each
-method on each prompt, alternating method order. Synchronized wall time includes
-prefill, all drafting/verification calls, cache management, and Python overhead;
-it excludes model loading, tokenization, W&B logging, and warm-up. This is a
-custom batch-one baseline, not a comparison with an optimized serving engine.
+Next steps are to resolve output-equivalence checks, reduce and measure drafter
+inference cost with a fair target-only comparison, and extend validation across
+context/output lengths. Final settings should be frozen before evaluating the
+held-out test set. More training and different adapters remain possible
+experiments; the current results do not establish their ultimate ceiling.
 
-W&B receives per-call TPS, a sample-output table, aggregate checks, acceptance,
-generated tokens per target verification, and a JSON artifact containing token
-IDs, timings, versions, hardware, and source provenance. The runner also saves
-`results/baseline.json` locally. TPS is total generated tokens divided by total
-timed seconds, not an average of individual TPS values. Acceptance is retained
-draft tokens divided by all proposed tokens; the correction/bonus contributes
-to generated tokens but not draft acceptance. Target verification counts exclude
-the initial prefill, and total forward-call counts are recorded separately.
+## Repository guide
 
-We report sequence and token-position mismatch rates. A nonzero mismatch gates
-the report's `verified_speedup` field to `null` pending investigation; numerical
-effects may explain differences, but a faster mismatching run is not presented
-as a verified acceleration. Five articles and two repetitions are a smoke
-benchmark, not a final uncertainty estimate or block-size selection.
+| Location | Contents |
+|---|---|
+| `decoding.py` | Greedy baseline, speculative verification, KV-cache handling, emission callbacks |
+| `distillation.py`, `train.py` | KL objective, LoRA training and evaluation |
+| `prepare_*.py`, `data/` | Data preparation, prepared chunks and provenance manifests |
+| `continue_*.py` | Audited training continuations and checkpoint restoration |
+| `reports/` | Human-readable reports, raw measurements and saved figures |
+| `demo/` | Offline recorded-output comparison in the browser |
+| `tests/` | Local and remote preflight checks |
+| `docs/PROJECT_GUIDE.md` | Detailed project history, infrastructure and design |
+| `docs/DEMO_PLAN.md` | Progress-report/video submission plan |
 
-The GPU function has a **600-second execution timeout**, no retries, one
-container, and rapid scale-down. Startup and model loading are billable; the
-timeout is not a dollar spending cap. The job performs no training or k sweep.
+Earlier measurements remain in [the baseline report](reports/BASELINE.md),
+[pilot report](reports/TRAINING.md), and
+[first expansion report](reports/TRAINING_10K.md). Their sample sizes and timing
+conditions differ; use each report's own paired comparisons.
 
-The first real run and its numerical follow-up are documented in
-[reports/BASELINE.md](reports/BASELINE.md). The untrained k=4 drafter was slower
-overall; BF16 output differences are reported explicitly. A separate FP32 target
-check matched on all five validation cases. Raw JSON reports are committed so
-the evidence can be inspected without a GPU or W&B access.
+## Sources and data licensing
 
-## Train the demo pilot
+- [Fast Inference from Transformers via Speculative Decoding](https://proceedings.mlr.press/v202/leviathan23a.html)
+  — speculative decoding background.
+- [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext)
+  and [dataset paper](https://arxiv.org/abs/1609.07843) — Wikipedia text source.
+- [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) and
+  [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) — pretrained models; exact
+  revisions are pinned in the data manifests and experiment reports.
 
-```sh
-MODAL_PROFILE=islam-95550 python train.py
-```
-
-The CPU preflight checks KL direction/normalization, frozen base weights,
-adapter updates, and adapter save/reload/merge before the GPU job. Commit code
-before launch. This uses the same A10 family, pinned models, BF16, SDPA, and
-prepared dataset as the baseline. Training is one shuffled pass over 500 chunks:
-microbatch one, accumulate four, 125 AdamW updates, constant learning rate
-`1e-4`, zero weight decay, gradient clipping at 1.0. LoRA uses rank 8, alpha 16,
-no dropout, and `q_proj`/`v_proj` only. These are pilot settings, not tuned optima.
-
-The frozen Qwen3-4B supplies next-token distributions on each text prefix.
-We minimize `KL(target || drafter)` over the full shared vocabulary, averaging
-over all 256 positions in each chunk, using FP32 log-softmax and temperature one.
-This is probability distillation on existing text, without activation matching
-or generated training answers. Only adapter weights receive gradients.
-
-Evaluate all 50 validation chunks at updates 0, 25, 50, 75, 100, and 125; keep
-the checkpoint with lowest validation KL, including the initial checkpoint if
-training does not help. W&B records training/validation KL and validation
-teacher-forced top-one agreement. This agreement uses fixed text prefixes and
-is distinct from speculative acceptance during free generation.
-
-Save best and final adapters to both W&B model artifacts and
-`spec-dec-benchmark-model-cache:/project-runs/<wandb-run-id>/`. Best weights are
-restored and checked before merging for inference. The merged model's validation
-loss is measured again to expose any BF16 merge effects. The original drafter
-is loaded separately; both inference drafters use plain Qwen modules without
-adapter execution overhead. Compare target-only, original speculative, and
-trained speculative decoding with the same five validation prompts, k=4,
-64-token output limit, two repetitions, and rotating execution order. Report
-numerical mismatches explicitly using the baseline's existing checks.
-
-The runner saves `results/training.json` and downloads checksummed adapter files
-to `results/adapters-<run-id>/`. W&B has loss curves, model artifacts, sample
-continuations, and pooled comparison metrics. GPU execution is limited to ten
-minutes, with one container and no retries; no held-out test file is mounted.
-The best checkpoint is chosen by validation loss; block-size tuning remains for
-later. Training runs and their weights are unique per W&B run ID.
-
-For the submitted loss figure, copy the completed JSON to
-`reports/training.json` and run `python plot_training.py`; it writes
-`reports/training_loss.png` without using a GPU.
-
-The completed pilot is documented in [reports/TRAINING.md](reports/TRAINING.md).
-Validation KL fell from 1.065 to 0.835; draft acceptance rose from 44.1% to 51.7%.
-In the paired validation pilot, trained speculative throughput was 24.4 tokens/s
-versus original speculative 22.5 and target-only 33.6. BF16 discrepancies remain;
-these results do not establish lossless acceleration. The held-out test prompts
-remain unused. Raw results and the loss figure are committed; adapters are in
-the linked W&B run and Modal volume.
-
-## Expanded data and continuation in the same W&B run
-
-The continuation is complete: validation KL **0.83503 → 0.75725** over updates
-126–2,625 in the same W&B run. In the same-job generation comparison, trained
-speculative throughput was **24.85 tokens/sec**, versus **22.36** with the
-original drafter and **32.87** target-only. BF16 discrepancies remain.
-See the [continuation report and KL figure](reports/TRAINING_10K.md).
-
-```sh
-TOKENIZERS_PARALLELISM=false python prepare_10k.py
-MODAL_PROFILE=islam-95550 python continue_training.py
-```
-
-The prepared `data/wikitext-10k/train.jsonl` contains **10,000 chunks from 10,000
-distinct training articles**, 256 tokens each: **2,560,000 tokens**. Its first
-500 rows exactly match the pilot training data; the other 9,500 add new articles.
-Validation/test files remain byte-for-byte unchanged under `data/pilot/`.
-The manifest pins versions, seed, source positions, checksums, and overlap checks.
-Sampling excludes official evaluation articles, repeated training titles/articles,
-duplicate windows, and shared 32-token passages with the fixed evaluation windows.
-The artifact audit runs in the local test suite. CPU preparation never trains a
-model or evaluates the test set.
-
-`continue_training.py` resumes **W&B run `hkays15c`** with `resume="must"`; it
-does not create a new W&B run. A read-only CPU preflight verifies the current
-W&B history and saved pilot checkpoint before any GPU allocation. If history
-has already advanced beyond that checkpoint, it refuses to train from stale
-weights. The pilot ended at update **125**; one new epoch over 10k chunks with
-effective batch four adds 2,500 updates, logging **126–2,625** on the existing
-`optimizer_step` axis. Original W&B history/configuration is preserved; expanded
-settings are recorded under `continuation_from_step_125`.
-
-This is a **weight continuation with a fresh Adam optimizer**: the pilot saved
-LoRA weights, not Adam moments. That optimizer reset is recorded explicitly.
-The continuation saves adapter and optimizer/RNG checkpoints every 250 updates,
-checks all 50 validation chunks, and selects the best validation checkpoint.
-The starting checkpoint is eligible. k remains four; the same five validation
-generation prompts are used for the final comparison, and test data remains unused.
-
-The continuation GPU function has a **one-hour execution timeout**, one
-container, and no automatic retries. It writes new files under
-`/cache/project-runs/hkays15c/continuation-126-2625/`, preserving the original
-pilot checkpoint. Local outputs go to `results/training-10k.json` and
-`results/adapters-hkays15c/training-10k/`. This command is specifically the first
-continuation of the pilot; rerunning it after history advances fails the
-preflight rather than duplicating updates.
-
-In the same W&B training run, `train/kl` and `validation/kl` use
-`optimizer_step` as their x-axis. `train/gradient_norm` records the norm returned
-by PyTorch **before** clipping to 1.0; it is not the learning rate or the size of
-Adam's weight update. Training batches differ, so inspect the fixed validation
-curve alongside the noisier batch metrics.
-
-To export both training phases after the continuation finishes, copy
-`results/training-10k.json` to `reports/training-10k.json` and run
-`python plot_training.py --continuation`. This writes
-`reports/training_10k_loss.png`, preserving the original pilot figure.
-
-## Fixed WikiText pilot
-
-The prepared files are committed under `data/pilot/`, ready to use without a
-Hugging Face download. Reproduce them locally with:
-
-```sh
-TOKENIZERS_PARALLELISM=false python prepare_data.py
-```
-
-This uses CPU only, downloads the raw WikiText-103 dataset and the two tokenizer
-files (no model weights), and refuses to overwrite a different existing dataset.
-The dataset revision, Qwen tokenizer revisions, seeds, source row ranges, article
-hashes, token offsets, package versions, and output checksums are saved in
-`data/pilot/manifest.json`. Running again with the same environment must produce
-identical files.
-
-| File | Samples | Tokens per sample | Use |
-| --- | ---: | --- | --- |
-| `train.jsonl` | 500 | 256 input tokens | Distillation training; 128,000 tokens |
-| `validation.jsonl` | 50 | 256 input tokens | Monitor loss and select a checkpoint |
-| `test.jsonl` | 100 | 128 prompt + 128 reference tokens | Frozen final comparison |
-
-HF rows are reconstructed into articles at level-one headings. We preserve the
-official splits, exclude training articles matching any validation/test title or
-normalized article hash, and sample across shuffled articles rather than taking
-the beginning of the corpus. Train/validation each use one random window per
-selected article. Test sampling takes one window per eligible article before a
-second round, with at most two windows per article, sampled in separate halves
-when there is room for two. All selected regions stay inside their article.
-
-Checks reject duplicate windows, cross-split article matches, and any shared
-contiguous 32-token passage between sampled splits. Test filtering gives
-validation priority; training filtering gives both evaluation sets priority.
-These checks do not detect semantic paraphrases or guarantee that Qwen never
-saw the source text during pretraining.
-
-`input_ids` are authoritative, unpadded token sequences without a chat template
-or added special tokens; `text` is their human-readable decoding. Both model
-tokenizer backends are checked for equality. Test `reference_ids`/
-`reference_text` are the actual next Wikipedia tokens, reserved alongside the
-prompt; they are **not** a teacher-generated answer and should not be used as the
-expected output in the speculative-decoding equivalence check. That check must
-compare against target-only generation with the same prompt and decoding setup.
-Here a prompt is a Wikipedia text extract for continuation, not a question.
-Claims from this dataset concern text continuation rather than question answering.
-
-Shuffle training order during training; keep dataset membership fixed. Use
-validation for decisions and test only after freezing the experiment, with the
-same prompts for all baselines and the trained drafter. Test prompts can share
-an article, so uncertainty estimates should group by article. Pilot sizes are a
-demo budget, not a proven optimum, and article-balanced Wikipedia samples do
-not establish performance on code or chat.
-
-Sources: [WikiText dataset and license](https://huggingface.co/datasets/Salesforce/wikitext)
-(CC BY-SA 3.0 / GFDL) and the
-[original paper](https://arxiv.org/abs/1609.07843). Prepared samples retain their
-source article titles and dataset provenance; applicable source licenses apply.
-
-## Local checks
-
-```sh
-python -m unittest discover -s tests -v
-```
-
-These checks require no API keys, downloads, or GPU. They exercise article
-boundaries, reproducibility, leakage guards, and the committed dataset checksums,
-and verify that the runner stops before launching a cloud app when the workspace
-is wrong or the W&B secret is missing.
-Four tiny-Qwen cache tests are skipped locally when PyTorch is absent; the
-baseline runner executes them on Modal CPU and requires all decoder checks to
-pass without skips before starting a GPU. Decoder caching follows the pinned
-[Transformers cache API](https://huggingface.co/docs/transformers/v4.57.3/en/kv_cache).
-Three training checks are also skipped when local PyTorch/PEFT are absent;
-`train.py` executes those on Modal CPU before allocating its GPU.
-The remote smoke test above checks the actual GPU and online W&B connection.
+WikiText lists CC BY-SA 3.0 / GFDL licensing. Prepared samples retain article
+provenance; applicable dataset and model licenses continue to apply.
